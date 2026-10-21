@@ -1,0 +1,379 @@
+from __future__ import annotations
+import json
+from dataclasses import dataclass, field
+from typing import Callable
+from stateforge.state.runtime_observer import (
+    Evidence,
+    OBSERVABLE,
+    SCOPE_SESSION,
+    StateKey,
+    StateObservation,
+    VALUE_KIND_BOOLEAN,
+    VALUE_KIND_MISSING,
+    VALUE_KIND_NULL,
+    VALUE_KIND_NUMBER,
+    VALUE_KIND_STRING,
+    VALUE_KIND_UNKNOWN,
+)
+from stateforge.state.session_index import (
+    COND_EQ,
+    COND_EXISTS,
+    COND_FALSY,
+    COND_IN,
+    COND_NE,
+    COND_NOT_EXISTS,
+    COND_NOT_IN,
+    COND_TRUTHY,
+    SessionCondition,
+)
+
+VERIFIED_TRUE = "VERIFIED_TRUE"
+VERIFIED_FALSE = "VERIFIED_FALSE"
+UNKNOWN = "UNKNOWN"
+
+SESSION_STATUS_DECODED = "decoded"
+SESSION_STATUS_ABSENT = "absent"
+SESSION_STATUS_INVALID = "invalid"
+SESSION_STATUS_UNKNOWN = "unknown"
+
+
+def value_kind_of(value) -> str:
+    if value is None:
+        return VALUE_KIND_NULL
+    if isinstance(value, bool):
+        return VALUE_KIND_BOOLEAN
+    if isinstance(value, (int, float)):
+        return VALUE_KIND_NUMBER
+    if isinstance(value, str):
+        return VALUE_KIND_STRING
+    return VALUE_KIND_UNKNOWN
+
+
+@dataclass(frozen=True)
+class SessionSnapshotView:
+    
+
+    status: str
+    values: dict | None = None
+    client_id: str = "client-0"
+    observation_point: str = "after_response"
+    observed_at: int = -1
+    source: str = ""
+    trusted: bool = True
+    observer_id: str = ""
+
+    @property
+    def decoded(self) -> bool:
+        return self.status == SESSION_STATUS_DECODED
+    @property
+    def absent(self) -> bool:
+        return self.status == SESSION_STATUS_ABSENT
+
+    @property
+    def authoritative(self) -> bool:
+        
+        return self.status in (SESSION_STATUS_DECODED, SESSION_STATUS_ABSENT)
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "values": dict(self.values) if self.values is not None else None,
+            "client_id": self.client_id,
+            "observation_point": self.observation_point,
+            "observed_at": self.observed_at,
+            "source": self.source,
+            "trusted": self.trusted,
+            "observer_id": self.observer_id,
+        }
+
+def snapshot_view(snapshot, *, client_id: str = "client-0",
+                  observation_point: str = "after_response",
+                  observed_at: int = -1,
+                  source: str = "target-snapshot",
+                  trusted: bool = True,
+                  observer_id: str = "") -> SessionSnapshotView:
+    
+    status = getattr(snapshot, "status", SESSION_STATUS_UNKNOWN)
+    values = getattr(snapshot, "values", None)
+    if status == SESSION_STATUS_DECODED and values is not None:
+        values = dict(values)
+    elif status == SESSION_STATUS_DECODED:
+        
+        status, values = SESSION_STATUS_UNKNOWN, None
+    else:
+        values = None
+    return SessionSnapshotView(status=status, values=values,
+                               client_id=client_id,
+                               observation_point=observation_point,
+                               observed_at=observed_at,
+                               source=source, trusted=trusted,
+                               observer_id=observer_id)
+
+
+def _source(view: SessionSnapshotView, cond: SessionCondition | None = None) -> str:
+    where = f"session_cookie:{view.client_id}:{view.observation_point}"
+    if cond is not None:
+        where += f":guard={cond.guard_block or '?'}:line={cond.source_line}"
+    return where
+
+
+def condition_predicate(cond: SessionCondition) -> str:
+    key = cond.key_expr if cond.key_kind == "CONST" else (
+        "*" if cond.key_kind == "ANY" else f"?{cond.key_expr or 'unknown'}")
+    base = f"Session.{key}"
+    if cond.op == COND_EXISTS:
+        return f"{base}.exists"
+    if cond.op == COND_NOT_EXISTS:
+        return f"{base}.not_exists"
+    if cond.op == COND_TRUTHY:
+        return f"{base}.truthy"
+    if cond.op == COND_FALSY:
+        return f"{base}.falsy"
+    return f"{base} {cond.op} {json.dumps(cond.value, ensure_ascii=False)}"
+
+
+def _observation(view: SessionSnapshotView, cond: SessionCondition,
+                 verdict: str, present: bool, actual) -> StateObservation:
+    if present:
+        kind = value_kind_of(actual)
+    else:
+        kind = VALUE_KIND_MISSING
+    return StateObservation(
+        key=StateKey(predicate=condition_predicate(cond),
+                     entity=view.client_id, scope=SCOPE_SESSION),
+        value=(verdict == VERIFIED_TRUE),
+        evidence=Evidence.RUNTIME_VERIFIED,
+        source=_source(view, cond),
+        observed_value=actual,
+        value_kind=kind,
+        observed_at=view.observed_at,
+    )
+
+
+@dataclass(frozen=True)
+class SessionConditionVerdict:
+    condition: SessionCondition
+    verdict: str
+    evidence: Evidence
+    observation: StateObservation | None
+    reason: str = ""
+
+    @property
+    def verified(self) -> bool:
+        return self.verdict in (VERIFIED_TRUE, VERIFIED_FALSE)
+
+    def to_dict(self) -> dict:
+        return {
+            "condition": self.condition.to_dict(),
+            "verdict": self.verdict,
+            "evidence": self.evidence.value,
+            "reason": self.reason,
+            "observation": (self.observation.to_dict()
+                            if self.observation is not None else None),
+        }
+
+
+@dataclass(frozen=True)
+class SessionGroupVerdict:
+    verdict: str
+    evidence: Evidence
+    conditions: tuple[SessionConditionVerdict, ...] = ()
+    observations: tuple[StateObservation, ...] = ()
+    reason: str = ""
+
+    @property
+    def verified(self) -> bool:
+        return self.verdict == VERIFIED_TRUE
+
+    def to_dict(self) -> dict:
+        return {
+            "verdict": self.verdict,
+            "evidence": self.evidence.value,
+            "reason": self.reason,
+            "conditions": [c.to_dict() for c in self.conditions],
+            "observations": [o.to_dict() for o in self.observations],
+        }
+
+
+@dataclass(frozen=True)
+class SessionEvidence:
+    
+
+    run_id: str
+    sequence_id: str
+    step_index: int
+    client_scope: str
+    observation_point_id: str
+    observer_id: str
+    observation_status: str
+    predicate_results: tuple = ()
+    witness: dict | None = None
+    reason: str = ""
+
+    @property
+    def trusted(self) -> bool:
+        return (self.observation_status in (SESSION_STATUS_DECODED,
+                                            SESSION_STATUS_ABSENT)
+                and bool(self.observer_id)
+                and self.witness is not None)
+    def to_dict(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "sequence_id": self.sequence_id,
+            "step_index": self.step_index,
+            "client_scope": self.client_scope,
+            "observation_point_id": self.observation_point_id,
+            "observer_id": self.observer_id,
+            "observation_status": self.observation_status,
+            "predicate_results": [dict(x) for x in self.predicate_results],
+            "witness": self.witness,
+            "trusted": self.trusted,
+            "reason": self.reason,
+        }
+
+
+def build_session_evidence(view: SessionSnapshotView,
+                           groups, *, run_id: str = "",
+                           sequence_id: str = "", step_index: int = 0,
+                           observer_id: str = "") -> SessionEvidence:
+    
+    observer = observer_id or view.observer_id
+    if not view.trusted or not observer or view.source.startswith("legacy"):
+        return SessionEvidence(
+            run_id, sequence_id, step_index, view.client_id,
+            view.observation_point, observer, view.status, (), None,
+            reason="untrusted-observer")
+    verdicts = tuple(evaluate_session_conditions(g, view) for g in groups)
+    predicates = []
+    for verdict in verdicts:
+        for cv in verdict.conditions:
+            predicates.append({"guard": cv.condition.guard_block,
+                               "source_line": cv.condition.source_line,
+                               "verdict": cv.verdict,
+                               "reason": cv.reason})
+    winner = next((v for v in verdicts if v.verdict == VERIFIED_TRUE), None)
+    witness = None
+    if winner is not None:
+        witness = {"verdict": VERIFIED_TRUE,
+                   "observations": [o.to_dict() for o in winner.observations]}
+    return SessionEvidence(
+        run_id, sequence_id, step_index, view.client_id,
+        view.observation_point, observer, view.status,
+        tuple(predicates), witness,
+        reason="verified" if witness else "no-verified-group")
+
+
+def evaluate_session_condition(cond: SessionCondition,
+                               view: SessionSnapshotView) -> SessionConditionVerdict:
+    if not view.authoritative:
+        return SessionConditionVerdict(
+            cond, UNKNOWN, Evidence.UNKNOWN, None,
+            reason=f"observation-{view.status}")
+
+    present = bool(view.decoded and view.values is not None
+                   and cond.key_expr in view.values)
+    actual = view.values.get(cond.key_expr) if present else None
+
+    if cond.op == COND_EXISTS:
+        truth = present
+    elif cond.op == COND_NOT_EXISTS:
+        truth = not present
+    elif not present:
+        
+        
+        
+        return SessionConditionVerdict(
+            cond, UNKNOWN, Evidence.UNKNOWN, None,
+            reason="missing-key")
+    elif cond.op == COND_TRUTHY:
+        truth = bool(actual)
+    elif cond.op == COND_FALSY:
+        truth = not bool(actual)
+    elif cond.op == COND_EQ:
+        truth = actual == cond.value
+    elif cond.op == COND_NE:
+        truth = actual != cond.value
+    elif cond.op == COND_IN:
+        try:
+            truth = actual in cond.value
+        except TypeError:
+            return SessionConditionVerdict(
+                cond, UNKNOWN, Evidence.UNKNOWN, None,
+                reason="uncomparable-in")
+    elif cond.op == COND_NOT_IN:
+        try:
+            truth = actual not in cond.value
+        except TypeError:
+            return SessionConditionVerdict(
+                cond, UNKNOWN, Evidence.UNKNOWN, None,
+                reason="uncomparable-not-in")
+    else:
+        return SessionConditionVerdict(
+            cond, UNKNOWN, Evidence.UNKNOWN, None,
+            reason=f"unsupported-condition:{cond.op}")
+
+    verdict = VERIFIED_TRUE if truth else VERIFIED_FALSE
+    obs = _observation(view, cond, verdict, present, actual)
+    return SessionConditionVerdict(cond, verdict, Evidence.RUNTIME_VERIFIED,
+                                   obs, reason="observed")
+
+
+def evaluate_session_conditions(group: tuple[SessionCondition, ...] | list,
+                                view: SessionSnapshotView) -> SessionGroupVerdict:
+    verdicts = [evaluate_session_condition(c, view) for c in group]
+    if not verdicts:
+        return SessionGroupVerdict(UNKNOWN, Evidence.UNKNOWN, (),
+                                   reason="empty-condition-group")
+    if any(v.verdict == VERIFIED_FALSE for v in verdicts):
+        return SessionGroupVerdict(VERIFIED_FALSE, Evidence.RUNTIME_VERIFIED,
+                                   tuple(verdicts),
+                                   tuple(v.observation for v in verdicts
+                                         if v.observation is not None),
+                                   reason="at-least-one-false")
+    if any(v.verdict == UNKNOWN for v in verdicts):
+        return SessionGroupVerdict(UNKNOWN, Evidence.UNKNOWN, tuple(verdicts),
+                                   tuple(v.observation for v in verdicts
+                                         if v.observation is not None),
+                                   reason="at-least-one-unknown")
+    return SessionGroupVerdict(VERIFIED_TRUE, Evidence.RUNTIME_VERIFIED,
+                               tuple(verdicts),
+                               tuple(v.observation for v in verdicts
+                                     if v.observation is not None),
+                               reason="all-true")
+
+
+def session_observations(view: SessionSnapshotView) -> list[StateObservation]:
+    
+    if not view.decoded or view.values is None:
+        return []
+    out: list[StateObservation] = []
+    for key in sorted(view.values, key=str):
+        value = view.values[key]
+        out.append(StateObservation(
+            key=StateKey(predicate=f"Session.{key}", entity=view.client_id,
+                         scope=SCOPE_SESSION),
+            value=True, evidence=Evidence.RUNTIME_VERIFIED,
+            source=_source(view), observed_value=value,
+            value_kind=value_kind_of(value), observed_at=view.observed_at))
+    return out
+
+
+class SessionRuntimeObserver:
+    
+
+    name = "session_cookie"
+    subject_families = {"Session.*": OBSERVABLE}
+
+    def __init__(self, provider: Callable[[], SessionSnapshotView],
+                 client_id: str = "client-0"):
+        self._provider = provider
+        self.client_id = client_id
+
+    def observe(self) -> list[StateObservation]:
+        view = self._provider()
+        if not isinstance(view, SessionSnapshotView):
+            view = snapshot_view(view, client_id=self.client_id)
+        return session_observations(view)
+
+    def observe_conditions(self, group) -> SessionGroupVerdict:
+        return evaluate_session_conditions(group, self._provider())

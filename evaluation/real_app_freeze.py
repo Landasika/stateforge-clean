@@ -1,0 +1,123 @@
+from __future__ import annotations
+import argparse
+import hashlib
+import json
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+APPS = ("microblog", "ctfd", "healthchecks", "linkding", "spirit")
+SEEDS = (1, 2, 3)
+BUDGET = 40
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate(matrix_path: Path, replay_root: Path) -> dict:
+    matrix = _load(matrix_path)
+    checks: dict[str, dict] = {}
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        checks[name] = {"ok": bool(ok), "detail": detail}
+
+    check("budget-40", matrix.get("budget") == BUDGET,
+          f"budget={matrix.get('budget')}")
+    check("five-apps", set(matrix.get("STATE_GUIDED", {})) == set(APPS),
+          str(sorted(matrix.get("STATE_GUIDED", {}))))
+    check("three-seeds", tuple(matrix.get("seeds", ())) == SEEDS,
+          str(matrix.get("seeds")))
+    for arm in ("STATE_GUIDED", "STATE_REUSE"):
+        ok = all(matrix.get(arm, {}).get(app, {}).get(str(seed), {}).get(
+            "target") for app in APPS for seed in SEEDS)
+        check(f"{arm.lower()}-15-of-15", ok)
+    replay_ok = all((replay_root / app / "replay.json").exists()
+                    and _load(replay_root / app / "replay.json").get(
+                        "suffix_target_covered") for app in APPS)
+    check("independent-replay-5-of-5", replay_ok)
+    
+    check("blind-preregistration", False,
+          "adapters/contracts were authored while developing, not pre-registered "
+          "before the five-app runs; no blind claim permitted")
+    return {
+        "ok": all(c["ok"] for c in checks.values()),
+        "checks": checks,
+        "matrix": str(matrix_path),
+        "replay_root": str(replay_root),
+        "apps": list(APPS),
+        "seeds": list(SEEDS),
+        "budget": BUDGET,
+    }
+
+
+def validate_heldout(directory: Path) -> dict:
+    
+    pre = _load(directory / "PREREGISTRATION.json")
+    results = _load(directory / "RESULTS.json")
+    checks: dict[str, dict] = {}
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        checks[name] = {"ok": bool(ok), "detail": detail}
+    check("budget-40", pre.get("budget") == BUDGET, str(pre.get("budget")))
+    check("heldout-seed", isinstance(pre.get("heldout_seed"), int),
+          str(pre.get("heldout_seed")))
+    hashes_ok = all(_sha(ROOT / f) == h
+                    for f, h in pre.get("engine_hashes", {}).items())
+    app_hashes_ok = all(_sha(ROOT / f) == h
+                        for fs in pre.get("app_hashes", {}).values()
+                        for f, h in fs.items())
+    check("engine-hashes-match", hashes_ok)
+    check("app-hashes-match", app_hashes_ok)
+    check("results-hashes-match", bool(results.get("hashes_match")))
+    summary = results.get("summary", {})
+    check("state-guided-5", summary.get("C") == 5, str(summary.get("C")))
+    check("state-reuse-5", summary.get("D") == 5, str(summary.get("D")))
+    check("replay-5", summary.get("replay") == 5, str(summary.get("replay")))
+    check("acceptance", bool(results.get("acceptance_met")))
+    manifest = _load(directory / "FREEZE_MANIFEST.json")
+    check("freeze-manifest", bool(manifest.get("frozen"))
+          and bool(manifest.get("blind_fuzzing_claimed")))
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks,
+            "directory": str(directory), "seed": pre.get("heldout_seed")}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--matrix", default=str(
+        ROOT / "artifacts/session_ss07f/FAIR_MATRIX.json"))
+    parser.add_argument("--replay-root", default=str(
+        ROOT / "artifacts/session_ss07f/independent_replay"))
+    parser.add_argument("--out", default=str(
+        ROOT / "artifacts/session_ss07f/FREEZE_REFUSED.json"))
+    parser.add_argument("--heldout", default="")
+    args = parser.parse_args(argv)
+    if args.heldout:
+        result = validate_heldout(Path(args.heldout))
+        print("FROZEN" if result["ok"] else "REFUSED",
+              json.dumps(result["checks"], ensure_ascii=False))
+        return 0 if result["ok"] else 1
+    result = validate(Path(args.matrix), Path(args.replay_root))
+    result["validated_at"] = time.time()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if result["ok"]:
+        manifest = dict(result, protocol="ss07-five-apps-v1", frozen=True,
+                        blind_fuzzing_claimed=True)
+        out.with_name("FREEZE_MANIFEST.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        print("FROZEN")
+        return 0
+    out.write_text(json.dumps(result, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    print("REFUSED", json.dumps(result["checks"], ensure_ascii=False))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
