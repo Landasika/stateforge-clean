@@ -33,6 +33,8 @@ class TraceSession:
         self._previous = None
         self._lock = threading.Lock()
         self._file_cache: dict[str, tuple[bool, str]] = {}
+        self._local = threading.local()
+        self._active_request = 0
 
     def start_request(self) -> int:
         with self._lock:
@@ -58,23 +60,29 @@ class TraceSession:
             self._file_cache[filename] = cached
         inside, resolved = cached
         if inside:
-            rid = getattr(self, "_active_request", 0)
+            rid = getattr(self._local, "request_id", 0)
             with self._lock:
                 index = self._request_indices.get(rid, 0)
                 self._request_indices[rid] = index + 1
-            self.events.append(TraceEvent(rid, index, resolved,
-                                          frame.f_code.co_name, frame.f_lineno,
-                                          event))
+                self.events.append(TraceEvent(rid, index, resolved,
+                                              frame.f_code.co_name,
+                                              frame.f_lineno, event))
         return self._trace
 
     def __enter__(self):
         self._previous = sys.gettrace()
-        self._active_request = self.start_request()
+        self._previous_request = getattr(self._local, "request_id", None)
+        rid = self.start_request()
+        self._active_request = rid
+        self._local.request_id = rid
         sys.settrace(self._trace)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         sys.settrace(self._previous)
+        previous = getattr(self, "_previous_request", None)
+        self._local.request_id = previous
+        self._active_request = previous if previous is not None else 0
         return False
 
     def request(self):
@@ -82,13 +90,38 @@ class TraceSession:
 
         class _Request:
             def __enter__(self):
-                session._active_request = session.start_request()
-                return session._active_request
+                self._previous = getattr(session._local, "request_id", None)
+                rid = session.start_request()
+                session._local.request_id = rid
+                session._active_request = rid
+                return rid
 
             def __exit__(self, exc_type, exc, tb):
+                previous = self._previous
+                session._local.request_id = previous
+                session._active_request = previous if previous is not None else 0
                 return False
 
         return _Request()
+
+    @contextlib.contextmanager
+    def trace_execution(self):
+        previous = sys.gettrace()
+        sys.settrace(self._trace)
+        try:
+            yield
+        finally:
+            sys.settrace(previous)
+
+    def drain_request_events(self, request_id: int) -> list[TraceEvent]:
+        with self._lock:
+            drained = [event for event in self.events
+                       if event.request_id == request_id]
+            if drained:
+                self.events = [event for event in self.events
+                               if event.request_id != request_id]
+            self._request_indices.pop(request_id, None)
+        return drained
 
     @contextlib.contextmanager
     def untraced(self):

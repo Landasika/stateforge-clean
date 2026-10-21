@@ -65,18 +65,22 @@ def save_feedback(scores: list[SeedScore], path: str | Path) -> None:
 
 
 def build_input_handler(adapter, session, writer: TraceJsonlWriter | None = None,
-                        every_n: int = 1):
+                        every_n: int = 1, bounded: bool = False):
     
     def handle(data: bytes) -> None:
         with session.request() as rid:
             start = len(session.events)
             error: str | None = None
+            events = []
             try:
                 adapter.execute(data)
             except Exception as exc:      
                 error = f"{type(exc).__name__}: {exc}"
-            if writer is not None and rid % every_n == 0:
-                writer.write_input(rid, data, error, session.events[start:])
+            finally:
+                events = (session.drain_request_events(rid) if bounded
+                          else session.events[start:])
+                if writer is not None and rid % every_n == 0:
+                    writer.write_input(rid, data, error, events)
     return handle
 
 
@@ -91,7 +95,7 @@ def run_atheris(adapter, root: str | Path | None = None,
     adapter.prepare(atheris)
     session = TraceSession(root)
     writer = TraceJsonlWriter(trace_path, fsync_every) if trace_path else None
-    handler = build_input_handler(adapter, session, writer, every_n)
+    handler = build_input_handler(adapter, session, writer, every_n, bounded=True)
     fuzz_argv = list(sys.argv if argv is None else argv)
     if corpus_dir:
         Path(corpus_dir).mkdir(parents=True, exist_ok=True)
