@@ -174,12 +174,22 @@ def test_cli_guided_command_runs_end_to_end(tmp_path: Path, monkeypatch):
         "--out", str(out),
         "--max-execs", "5",
         "--random-seed", "42",
+        "--selection-policy", "uniform",
+        "--energy-policy", "fixed",
+        "--fixed-energy", "2",
     ]
     monkeypatch.setattr(sys, "argv", arguments)
     assert main() == 0
     summary = json.loads((out / "summary.json").read_text())
     assert summary["target_reached"] is True
     assert summary["termination_reason"] == "target_reached"
+    assert summary["scheduler"]["selection_policy"] == "uniform"
+    assert summary["scheduler"]["energy_policy"] == "fixed"
+    assert summary["scheduler"]["fixed_energy"] == 2
+    configuration = json.loads((out / "config.json").read_text())
+    assert configuration["config"]["selection_policy"] == "uniform"
+    assert configuration["config"]["energy_policy"] == "fixed"
+    assert configuration["config"]["fixed_energy"] == 2
 
 
 def test_cli_rejects_invalid_target(tmp_path: Path, monkeypatch, capsys):

@@ -60,7 +60,9 @@ class TraceSession:
             self._file_cache[filename] = cached
         inside, resolved = cached
         if inside:
-            rid = getattr(self._local, "request_id", 0)
+            rid = getattr(self._local, "request_id", None)
+            if rid is None:
+                return self._trace
             with self._lock:
                 index = self._request_indices.get(rid, 0)
                 self._request_indices[rid] = index + 1
@@ -70,8 +72,12 @@ class TraceSession:
         return self._trace
 
     def __enter__(self):
-        self._previous = sys.gettrace()
-        self._previous_request = getattr(self._local, "request_id", None)
+        stack = getattr(self._local, "session_stack", None)
+        if stack is None:
+            stack = []
+            self._local.session_stack = stack
+        stack.append((sys.gettrace(),
+                      getattr(self._local, "request_id", None)))
         rid = self.start_request()
         self._active_request = rid
         self._local.request_id = rid
@@ -79,8 +85,8 @@ class TraceSession:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        sys.settrace(self._previous)
-        previous = getattr(self, "_previous_request", None)
+        previous_trace, previous = self._local.session_stack.pop()
+        sys.settrace(previous_trace)
         self._local.request_id = previous
         self._active_request = previous if previous is not None else 0
         return False

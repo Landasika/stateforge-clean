@@ -129,3 +129,51 @@ def test_long_running_request_drain_keeps_memory_bounded(tmp_path: Path):
 def test_draining_unknown_request_returns_empty(tmp_path: Path):
     session = TraceSession(tmp_path)
     assert session.drain_request_events(999) == []
+
+
+def test_events_outside_an_active_request_are_not_recorded(tmp_path: Path):
+    namespace = _namespace(tmp_path)
+    session = TraceSession(tmp_path)
+    with session.trace_execution():
+        namespace["f"]()
+    assert session.events == []
+    assert session._request_indices == {}
+
+
+def test_nested_session_contexts_restore_the_outer_request(tmp_path: Path):
+    namespace = _namespace(tmp_path)
+    session = TraceSession(tmp_path)
+    with session:
+        top_request = session._local.request_id
+        with session.request() as outer:
+            namespace["f"]()
+            with session:
+                nested_request = session._local.request_id
+                namespace["g"]()
+            assert session._local.request_id == outer
+        outer_events = session.drain_request_events(outer)
+        nested_events = session.drain_request_events(nested_request)
+        top_events = session.drain_request_events(top_request)
+    assert outer_events
+    assert all(event.function == "f" for event in outer_events)
+    assert nested_events
+    assert all(event.function == "g" for event in nested_events)
+    assert top_events == []
+    assert session.events == []
+
+
+def test_drain_after_exception_releases_only_that_request(tmp_path: Path):
+    namespace = _namespace(tmp_path)
+    session = TraceSession(tmp_path)
+    with session.trace_execution():
+        with session.request() as rid:
+            try:
+                namespace["f"]()
+                raise RuntimeError("boom")
+            except RuntimeError:
+                pass
+        events = session.drain_request_events(rid)
+    assert events
+    assert all(event.request_id == rid for event in events)
+    assert session.events == []
+    assert rid not in session._request_indices

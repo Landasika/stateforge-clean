@@ -69,6 +69,7 @@ class GuidedCorpus:
             raise ValueError("max_size must be positive")
         self.max_size = max_size
         self._seeds: dict[str, GuidedSeed] = {}
+        self.target_archive: dict[str, GuidedSeed] = {}
         self.covered_blocks: set[str] = set()
         self.covered_edges: set[tuple[str, str]] = set()
         self.best_distance: int | None = None
@@ -80,6 +81,10 @@ class GuidedCorpus:
     @property
     def seeds(self) -> list[GuidedSeed]:
         return list(self._seeds.values())
+
+    @property
+    def archived_targets(self) -> list[GuidedSeed]:
+        return list(self.target_archive.values())
 
     def get(self, seed_id: str) -> GuidedSeed | None:
         return self._seeds.get(seed_id)
@@ -107,7 +112,7 @@ class GuidedCorpus:
             self.best_distance = distance
         if reached:
             self.target_reached = True
-        if seed_id in self._seeds:
+        if seed_id in self._seeds or seed_id in self.target_archive:
             return False
         retain = (reached or bool(new_blocks) or bool(new_edges) or improves
                   or representative or not self._seeds)
@@ -143,6 +148,7 @@ class GuidedCorpus:
 
     def remove(self, seed_id: str) -> None:
         self._seeds.pop(seed_id, None)
+        self.target_archive.pop(seed_id, None)
 
     def best_seed(self) -> GuidedSeed | None:
         candidates = [seed for seed in self._seeds.values()
@@ -153,31 +159,23 @@ class GuidedCorpus:
 
     def _prune(self) -> None:
         if len(self._seeds) <= self.max_size:
+            self._sync_target_archive()
             return
+        seeds = list(self._seeds.values())
         forced: list[str] = []
-        target_ids = sorted(seed_id for seed_id, seed in self._seeds.items()
-                            if seed.target_reached)
-        if len(target_ids) >= self.max_size:
-            keep = set(target_ids)
-            self._seeds = {seed_id: seed for seed_id, seed in self._seeds.items()
-                           if seed_id in keep}
-            return
-        forced.extend(target_ids)
+        forced.extend(self._target_representatives(seeds, self.max_size))
         best = self.best_seed()
-        if best is not None and best.seed_id not in forced:
-            forced.append(best.seed_id)
-        if len(forced) < self.max_size and self._seeds:
-            wide = max(self._seeds.values(),
-                       key=lambda seed: (len(seed.covered_blocks),
-                                         len(seed.covered_edges),
-                                         seed.seed_id))
+        if best is not None and len(forced) < self.max_size:
+            if best.seed_id not in forced:
+                forced.append(best.seed_id)
+        if len(forced) < self.max_size:
+            wide = max(seeds, key=lambda seed: (
+                len(seed.covered_blocks), len(seed.covered_edges), seed.seed_id))
             if wide.seed_id not in forced:
                 forced.append(wide.seed_id)
-        if len(forced) < self.max_size and self._seeds:
-            broad = max(self._seeds.values(),
-                        key=lambda seed: (len(seed.covered_edges),
-                                          len(seed.covered_blocks),
-                                          seed.seed_id))
+        if len(forced) < self.max_size:
+            broad = max(seeds, key=lambda seed: (
+                len(seed.covered_edges), len(seed.covered_blocks), seed.seed_id))
             if broad.seed_id not in forced:
                 forced.append(broad.seed_id)
         forced = forced[:self.max_size]
@@ -185,10 +183,53 @@ class GuidedCorpus:
         remaining = [seed for seed_id, seed in self._seeds.items()
                      if seed_id not in forced_set]
         remaining.sort(key=self._prune_key, reverse=True)
-        keep = forced + [seed.seed_id for seed in remaining[:self.max_size - len(forced)]]
+        keep = forced + [seed.seed_id for seed in
+                         remaining[:self.max_size - len(forced)]]
         keep_set = set(keep)
+        removed = [seed for seed_id, seed in self._seeds.items()
+                   if seed_id not in keep_set]
+        for seed in removed:
+            if seed.target_reached:
+                self.target_archive[seed.seed_id] = seed
         self._seeds = {seed_id: seed for seed_id, seed in self._seeds.items()
                        if seed_id in keep_set}
+        self._sync_target_archive()
+
+    @staticmethod
+    def _target_representatives(seeds: list[GuidedSeed],
+                                limit: int) -> list[str]:
+        targets = [seed for seed in seeds if seed.target_reached]
+        if not targets or limit < 1:
+            return []
+        if len(targets) <= limit:
+            return [seed.seed_id for seed in sorted(
+                targets, key=lambda seed: seed.seed_id)]
+        selected: list[str] = []
+        remaining = list(targets)
+        seen_blocks: set[str] = set()
+        seen_edges: set[tuple[str, str]] = set()
+        while remaining and len(selected) < limit:
+            best = max(remaining, key=lambda seed: (
+                len(seed.covered_blocks - seen_blocks),
+                len(seed.covered_edges - seen_edges),
+                len(seed.covered_blocks),
+                len(seed.covered_edges),
+                -seed.executions_selected,
+                seed.seed_id,
+            ))
+            selected.append(best.seed_id)
+            seen_blocks.update(best.covered_blocks)
+            seen_edges.update(best.covered_edges)
+            remaining.remove(best)
+        return selected
+
+    def _sync_target_archive(self) -> None:
+        for seed_id in list(self.target_archive):
+            if seed_id in self._seeds:
+                del self.target_archive[seed_id]
+        for seed_id, seed in self._seeds.items():
+            if seed.target_reached:
+                self.target_archive.pop(seed_id, None)
 
     @staticmethod
     def _prune_key(seed: GuidedSeed) -> tuple[int, int, int, int, int, str]:

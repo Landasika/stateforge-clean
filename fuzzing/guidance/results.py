@@ -53,6 +53,7 @@ class CampaignResult:
     elapsed_seconds: float
     target_input_id: str | None = None
     output_dir: str | None = None
+    archived_targets: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +73,7 @@ class CampaignResult:
             "elapsed_seconds": self.elapsed_seconds,
             "target_reaching_input_id": self.target_input_id,
             "output_dir": self.output_dir,
+            "archived_target_seeds": self.archived_targets,
         }
 
 
@@ -82,8 +84,10 @@ class CampaignReporter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.corpus_dir = self.output_dir / "corpus"
         self.crashes_dir = self.output_dir / "crashes"
+        self.target_archive_dir = self.output_dir / "target_archive"
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
         self.crashes_dir.mkdir(parents=True, exist_ok=True)
+        self.target_archive_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_path = self.output_dir / "metrics.jsonl"
         self.config_path = self.output_dir / "config.json"
         self.summary_path = self.output_dir / "summary.json"
@@ -99,6 +103,11 @@ class CampaignReporter:
               mutation: dict[str, Any] | None = None) -> None:
         if self.target_input_path.exists():
             self.target_input_path.unlink()
+        for directory in (self.corpus_dir, self.crashes_dir,
+                          self.target_archive_dir):
+            for path in directory.iterdir():
+                if path.is_file():
+                    path.unlink()
         payload = {
             "target_basic_block": self._target_block_id,
             "source_hash": self._source_hash,
@@ -117,6 +126,12 @@ class CampaignReporter:
 
     def save_seed(self, seed: Any) -> Path:
         path = self.corpus_dir / f"{seed.seed_id}.bin"
+        if not path.exists():
+            path.write_bytes(seed.data)
+        return path
+
+    def save_archived_target(self, seed: Any) -> Path:
+        path = self.target_archive_dir / f"{seed.seed_id}.bin"
         if not path.exists():
             path.write_bytes(seed.data)
         return path

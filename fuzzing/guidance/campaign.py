@@ -59,10 +59,28 @@ class CampaignConfig:
     output_dir: str | Path | None = None
     min_energy: int = 1
     max_energy: int = 32
-    scheduler_name: str = "guided"
+    scheduler_name: str | None = None
+    selection_policy: str = "distance"
+    energy_policy: str = "distance"
+    fixed_energy: int = 1
     progress_every: int = 100
 
     def __post_init__(self) -> None:
+        if self.scheduler_name is not None:
+            if self.scheduler_name == "uniform":
+                self.selection_policy = "uniform"
+                self.energy_policy = "fixed"
+            elif self.scheduler_name == "guided":
+                self.selection_policy = "distance"
+                self.energy_policy = "distance"
+            else:
+                raise ValueError("scheduler_name must be 'guided' or 'uniform'")
+        if self.selection_policy not in ("uniform", "distance"):
+            raise ValueError("selection_policy must be 'uniform' or 'distance'")
+        if self.energy_policy not in ("fixed", "distance"):
+            raise ValueError("energy_policy must be 'fixed' or 'distance'")
+        if self.fixed_energy < 1:
+            raise ValueError("fixed_energy must be positive")
         if self.max_executions < 0:
             raise ValueError("max_executions must be non-negative")
         if self.max_seconds is not None and self.max_seconds < 0:
@@ -75,8 +93,6 @@ class CampaignConfig:
             raise ValueError("epsilon must be in [0, 1]")
         if self.fault_policy not in ("continue", "stop"):
             raise ValueError("fault_policy must be 'continue' or 'stop'")
-        if self.scheduler_name not in ("guided", "uniform"):
-            raise ValueError("scheduler_name must be 'guided' or 'uniform'")
         if self.min_energy < 1 or self.max_energy < self.min_energy:
             raise ValueError("invalid energy bounds")
         if self.progress_every < 1:
@@ -96,7 +112,11 @@ class CampaignConfig:
             "output_dir": str(self.output_dir) if self.output_dir else None,
             "min_energy": self.min_energy,
             "max_energy": self.max_energy,
-            "scheduler": self.scheduler_name,
+            "scheduler": self.selection_policy,
+            "selection_policy": self.selection_policy,
+            "energy_policy": self.energy_policy,
+            "fixed_energy": self.fixed_energy,
+            "legacy_scheduler_name": self.scheduler_name,
             "progress_every": self.progress_every,
         }
 
@@ -119,16 +139,14 @@ class GuidedCampaign:
         self.corpus = corpus if corpus is not None else GuidedCorpus(
             self.config.max_corpus_size)
         if scheduler is None:
-            if self.config.scheduler_name == "uniform":
-                scheduler = UniformScheduler(
-                    random_seed=self.config.random_seed,
-                    energy=self.config.min_energy)
-            else:
-                scheduler = GuidedScheduler(
-                    epsilon=self.config.epsilon,
-                    random_seed=self.config.random_seed,
-                    min_energy=self.config.min_energy,
-                    max_energy=self.config.max_energy)
+            scheduler = GuidedScheduler(
+                epsilon=self.config.epsilon,
+                random_seed=self.config.random_seed,
+                min_energy=self.config.min_energy,
+                max_energy=self.config.max_energy,
+                selection_policy=self.config.selection_policy,
+                energy_policy=self.config.energy_policy,
+                fixed_energy=self.config.fixed_energy)
         self.scheduler = scheduler
         self.mutator = (mutator if mutator is not None
                         else BasicMutator(self.config.random_seed))
@@ -236,6 +254,7 @@ class GuidedCampaign:
         finally:
             if self._reporter is not None:
                 try:
+                    self._save_target_archive()
                     self._reporter.write_summary(
                         self._summary(self.termination_reason or "error"))
                 finally:
@@ -320,6 +339,12 @@ class GuidedCampaign:
                     self._summary(self.termination_reason or "running"))
         return result
 
+    def _save_target_archive(self) -> None:
+        if self._reporter is None:
+            return
+        for seed in self.corpus.archived_targets:
+            self._reporter.save_archived_target(seed)
+
     def _budget_reason(self) -> str | None:
         if self.executions >= self.config.max_executions:
             return "max_executions"
@@ -357,6 +382,7 @@ class GuidedCampaign:
             target_input_id=self.target_input_id,
             output_dir=(str(self.config.output_dir)
                         if self.config.output_dir is not None else None),
+            archived_targets=len(self.corpus.target_archive),
         )
 
     def _summary(self, reason: str) -> dict[str, Any]:
@@ -378,8 +404,17 @@ class GuidedCampaign:
         return payload
 
     def _scheduler_info(self) -> dict[str, Any]:
+        selection_policy = getattr(self.scheduler, "selection_policy",
+                                   self.config.selection_policy)
+        energy_policy = getattr(self.scheduler, "energy_policy",
+                                self.config.energy_policy)
+        fixed_energy = getattr(self.scheduler, "fixed_energy",
+                               self.config.fixed_energy)
         return {
-            "name": self.config.scheduler_name,
+            "name": selection_policy,
+            "selection_policy": selection_policy,
+            "energy_policy": energy_policy,
+            "fixed_energy": fixed_energy,
             "epsilon": self.config.epsilon,
             "random_seed": self.config.random_seed,
             "min_energy": self.config.min_energy,

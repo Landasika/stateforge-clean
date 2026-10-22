@@ -155,3 +155,51 @@ def test_uniform_scheduler_has_no_distance_dependence():
     probabilities = scheduler.selection_probabilities(corpus)
     assert all(value == pytest.approx(0.5) for value in probabilities.values())
     assert scheduler.allocate_energy(corpus.seeds[0]) == 1
+
+
+def test_uniform_selection_with_distance_energy():
+    near = _seed("near", 0)
+    far = _seed("far", 100)
+    corpus = _corpus(near, far)
+    scheduler = GuidedScheduler(
+        epsilon=0.0, random_seed=3,
+        selection_policy="uniform", energy_policy="distance",
+        min_energy=1, max_energy=8)
+    probabilities = scheduler.selection_probabilities(corpus)
+    assert probabilities[near.seed_id] == pytest.approx(0.5)
+    assert probabilities[far.seed_id] == pytest.approx(0.5)
+    assert scheduler.allocate_energy(near) > scheduler.allocate_energy(far)
+
+
+def test_distance_selection_with_fixed_energy():
+    near = _seed("near", 0)
+    far = _seed("far", 100)
+    corpus = _corpus(near, far)
+    scheduler = GuidedScheduler(
+        epsilon=0.0, random_seed=3,
+        selection_policy="distance", energy_policy="fixed",
+        fixed_energy=7)
+    probabilities = scheduler.selection_probabilities(corpus)
+    assert probabilities[near.seed_id] > probabilities[far.seed_id]
+    assert scheduler.allocate_energy(near) == 7
+    assert scheduler.allocate_energy(far) == 7
+
+
+def test_independent_policy_validation():
+    with pytest.raises(SchedulerError):
+        GuidedScheduler(selection_policy="other")
+    with pytest.raises(SchedulerError):
+        GuidedScheduler(energy_policy="other")
+    with pytest.raises(SchedulerError):
+        GuidedScheduler(fixed_energy=0)
+
+
+def test_uniform_selection_ignores_epsilon_and_distance_order():
+    near = _seed("near", 0)
+    far = _seed("far", 100)
+    corpus = _corpus(near, far)
+    scheduler = GuidedScheduler(
+        epsilon=1.0, random_seed=9,
+        selection_policy="uniform", energy_policy="fixed")
+    sequence = [scheduler.select(corpus).seed_id for _ in range(50)]
+    assert set(sequence) == {near.seed_id, far.seed_id}

@@ -145,11 +145,7 @@ def guided_cmd(args) -> int:
         GuidedCampaign,
     )
     from stateforge.fuzzing.guidance.mutator import BasicMutator
-    from stateforge.fuzzing.guidance.scheduler import (
-        EmptyCorpusError,
-        GuidedScheduler,
-        UniformScheduler,
-    )
+    from stateforge.fuzzing.guidance.scheduler import EmptyCorpusError
     from stateforge.fuzzing.guidance.target import (
         BasicBlockTarget,
         GuidanceError,
@@ -173,26 +169,18 @@ def guided_cmd(args) -> int:
             min_energy=args.min_energy,
             max_energy=args.max_energy,
             scheduler_name=args.scheduler,
+            selection_policy=args.selection_policy,
+            energy_policy=args.energy_policy,
+            fixed_energy=args.fixed_energy,
             progress_every=args.progress_every,
         )
         target = BasicBlockTarget(args.target_bb)
         corpus = GuidedCorpus(args.max_corpus_size)
-        if args.scheduler == "uniform":
-            scheduler = UniformScheduler(
-                random_seed=args.random_seed, energy=args.min_energy)
-        else:
-            scheduler = GuidedScheduler(
-                epsilon=args.epsilon,
-                random_seed=args.random_seed,
-                min_energy=args.min_energy,
-                max_energy=args.max_energy,
-            )
         campaign = GuidedCampaign(
             ir=ir,
             target=target,
             adapter=adapter,
             corpus=corpus,
-            scheduler=scheduler,
             mutator=BasicMutator(args.random_seed),
             config=config,
         )
@@ -250,10 +238,15 @@ def main() -> int:
     guided.add_argument("--random-seed", type=int, default=0)
     guided.add_argument("--min-energy", type=int, default=1)
     guided.add_argument("--max-energy", type=int, default=32)
+    guided.add_argument("--selection-policy", choices=("uniform", "distance"),
+                        default="distance")
+    guided.add_argument("--energy-policy", choices=("fixed", "distance"),
+                        default="distance")
+    guided.add_argument("--fixed-energy", type=int, default=1)
     guided.add_argument("--fault-policy", choices=("continue", "stop"),
                         default="continue")
     guided.add_argument("--scheduler", choices=("guided", "uniform"),
-                        default="guided")
+                        default=None)
     guided.add_argument("--progress-every", type=int, default=100)
     guided.add_argument("--allow-stale-ir", action="store_true")
     guided.add_argument("--stop-on-target", action=argparse.BooleanOptionalAction,

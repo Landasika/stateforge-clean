@@ -19,15 +19,27 @@ class SchedulerError(ValueError):
 class GuidedScheduler:
     def __init__(self, epsilon: float = 0.20, random_seed: int = 0,
                  min_energy: int = 1, max_energy: int = 32,
-                 rng: random.Random | None = None):
+                 rng: random.Random | None = None,
+                 selection_policy: str = "distance",
+                 energy_policy: str = "distance",
+                 fixed_energy: int = 1):
         if not 0.0 <= epsilon <= 1.0:
             raise SchedulerError("epsilon must be in [0, 1]")
         if min_energy < 1 or max_energy < min_energy:
             raise SchedulerError("invalid energy bounds")
+        if selection_policy not in ("uniform", "distance"):
+            raise SchedulerError("selection_policy must be 'uniform' or 'distance'")
+        if energy_policy not in ("fixed", "distance"):
+            raise SchedulerError("energy_policy must be 'fixed' or 'distance'")
+        if fixed_energy < 1:
+            raise SchedulerError("fixed_energy must be positive")
         self.epsilon = epsilon
         self.random_seed = random_seed
         self.min_energy = min_energy
         self.max_energy = max_energy
+        self.selection_policy = selection_policy
+        self.energy_policy = energy_policy
+        self.fixed_energy = fixed_energy
         self._rng = rng if rng is not None else random.Random(random_seed)
         self._improvements: dict[str, int] = {}
         self._last_child_distance: dict[str, int | None] = {}
@@ -60,6 +72,9 @@ class GuidedScheduler:
         seeds = corpus.seeds
         if not seeds:
             raise EmptyCorpusError("cannot select from an empty corpus")
+        if self.selection_policy == "uniform":
+            uniform = 1.0 / len(seeds)
+            return {seed.seed_id: uniform for seed in seeds}
         self._refresh_best(corpus)
         weights = {seed.seed_id: self.selection_weight(seed) for seed in seeds}
         total = sum(weights.values())
@@ -73,7 +88,9 @@ class GuidedScheduler:
         if not seeds:
             raise EmptyCorpusError("cannot select from an empty corpus")
         self._refresh_best(corpus)
-        if self._rng.random() < self.epsilon:
+        if self.selection_policy == "uniform":
+            selected = self._rng.choice(seeds)
+        elif self._rng.random() < self.epsilon:
             selected = self._rng.choice(seeds)
         else:
             probabilities = self.selection_probabilities(corpus)
@@ -89,6 +106,8 @@ class GuidedScheduler:
         return selected
 
     def allocate_energy(self, seed: GuidedSeed) -> int:
+        if self.energy_policy == "fixed":
+            return self.fixed_energy
         span = self.max_energy - self.min_energy
         energy = self.min_energy + round(span * self.priority(seed))
         return max(self.min_energy, min(self.max_energy, energy))
@@ -116,6 +135,11 @@ class UniformScheduler:
             raise SchedulerError("energy must be positive")
         self.random_seed = random_seed
         self.energy = energy
+        self.selection_policy = "uniform"
+        self.energy_policy = "fixed"
+        self.fixed_energy = energy
+        self.min_energy = energy
+        self.max_energy = energy
         self._rng = rng if rng is not None else random.Random(random_seed)
 
     def select(self, corpus: GuidedCorpus) -> GuidedSeed:

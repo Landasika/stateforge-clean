@@ -53,7 +53,8 @@ class BoomAdapter:
 def _campaign(output: Path | None = None, scheduler=None, mutator=None,
               max_executions: int = 50, stop_on_target: bool = True,
               fault_policy: str = "continue",
-              max_seconds: float | None = None):
+              max_seconds: float | None = None,
+              max_corpus_size: int = 100):
     ir = build_example_ir()
     config = CampaignConfig(
         max_executions=max_executions,
@@ -63,14 +64,14 @@ def _campaign(output: Path | None = None, scheduler=None, mutator=None,
         stop_on_target=stop_on_target,
         fault_policy=fault_policy,
         output_dir=output,
-        max_corpus_size=100,
+        max_corpus_size=max_corpus_size,
         progress_every=10,
     )
     return GuidedCampaign(
         ir=ir,
         target=BasicBlockTarget(target_block_id(ir)),
         adapter=example_adapter(),
-        corpus=GuidedCorpus(100),
+        corpus=GuidedCorpus(max_corpus_size),
         scheduler=scheduler or GuidedScheduler(epsilon=0.0, random_seed=7),
         mutator=mutator or StagedMutator(),
         config=config,
@@ -196,6 +197,7 @@ def test_target_reaching_file_is_absent_when_target_is_not_reached(tmp_path: Pat
     assert not (out / "target_reaching_input.bin").exists()
     assert (out / "corpus").is_dir()
     assert (out / "crashes").is_dir()
+    assert (out / "target_archive").is_dir()
 
 
 def test_trace_memory_is_released_between_executions(tmp_path: Path):
@@ -236,3 +238,102 @@ def test_stale_ir_requires_explicit_override(tmp_path: Path):
         ir, target, example_adapter(),
         config=CampaignConfig(max_executions=1, allow_stale_ir=True))
     assert campaign.target_manager.stale
+
+
+class FailAfterExecuteAdapter:
+    def __init__(self, exception: type[BaseException]):
+        self.exception = exception
+
+    def execute(self, data: bytes):
+        from examples.m1_target import target
+        target(data)
+        raise self.exception("boom")
+
+
+def test_repeated_executions_keep_feedback_isolated():
+    campaign = _campaign(max_executions=1000)
+    results = []
+    for index in range(300):
+        data = b"A00" if index % 2 == 0 else b"ZZZ"
+        result = campaign.execute_input(data)
+        results.append((data, result))
+        assert campaign.session.events == []
+        assert campaign.session._request_indices == {}
+    for data, result in results:
+        if data == b"A00":
+            assert result.distance == 10
+            assert not result.target_reached
+        else:
+            assert not result.target_reached
+    assert campaign.total_trace_events > 0
+
+
+def test_exception_path_drains_trace_and_next_execution_is_isolated():
+    campaign = _campaign(max_executions=10)
+    campaign.adapter = FailAfterExecuteAdapter(RuntimeError)
+    failed = campaign.execute_input(b"ZZZ")
+    assert failed.error == "RuntimeError: boom"
+    assert campaign.session.events == []
+    campaign.adapter = example_adapter()
+    healthy = campaign.execute_input(b"A00")
+    assert healthy.error is None
+    assert healthy.distance == 10
+    assert healthy.covered_blocks
+    assert campaign.session.events == []
+
+
+def test_base_exception_drains_trace_before_propagating():
+    campaign = _campaign(max_executions=10)
+    campaign.adapter = FailAfterExecuteAdapter(KeyboardInterrupt)
+    with pytest.raises(KeyboardInterrupt):
+        campaign.execute_input(b"ZZZ")
+    assert campaign.session.events == []
+    campaign.adapter = example_adapter()
+    healthy = campaign.execute_input(b"A00")
+    assert healthy.error is None
+    assert healthy.distance == 10
+
+
+def test_archived_targets_are_persisted_outside_active_corpus(tmp_path: Path):
+    out = tmp_path / "out"
+    campaign = _campaign(output=out, max_executions=3,
+                         stop_on_target=False, max_corpus_size=2)
+    result = campaign.run([b"ABC", b"ABC0", b"ABC00"])
+    assert result.target_reached
+    assert result.archived_targets == 1
+    assert len(campaign.corpus) == 2
+    files = list((out / "target_archive").glob("*.bin"))
+    assert len(files) == 1
+    assert files[0].read_bytes() in (b"ABC", b"ABC0", b"ABC00")
+
+
+def test_config_legacy_scheduler_maps_to_policies():
+    uniform = CampaignConfig(scheduler_name="uniform")
+    assert uniform.selection_policy == "uniform"
+    assert uniform.energy_policy == "fixed"
+    guided = CampaignConfig(scheduler_name="guided")
+    assert guided.selection_policy == "distance"
+    assert guided.energy_policy == "distance"
+
+
+def test_config_keeps_explicit_policies():
+    config = CampaignConfig(selection_policy="uniform", energy_policy="distance",
+                            fixed_energy=4)
+    assert config.selection_policy == "uniform"
+    assert config.energy_policy == "distance"
+    assert config.fixed_energy == 4
+
+
+def test_campaign_builds_scheduler_from_policies():
+    campaign = _campaign()
+    campaign.config.selection_policy = "uniform"
+    campaign.config.energy_policy = "fixed"
+    campaign.config.fixed_energy = 3
+    built = GuidedCampaign(
+        ir=build_example_ir(),
+        target=BasicBlockTarget(target_block_id(build_example_ir())),
+        adapter=example_adapter(),
+        config=campaign.config)
+    assert built.scheduler.selection_policy == "uniform"
+    assert built.scheduler.energy_policy == "fixed"
+    assert built.scheduler.fixed_energy == 3

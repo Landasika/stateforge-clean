@@ -112,3 +112,77 @@ def test_pruning_is_deterministic():
         return [seed.seed_id for seed in corpus.seeds]
 
     assert build() == build()
+
+
+def test_capacity_one_with_many_targets_keeps_one_and_archives_rest():
+    corpus = GuidedCorpus(max_size=1)
+    for index in range(20):
+        corpus.consider(bytes([index]), _result(
+            {f"t{index}"}, {(f"t{index}", "next")}, 0, target=True))
+    assert len(corpus) == 1
+    assert len(corpus.target_archive) == 19
+    assert len(corpus.seeds[0].data) == 1
+    assert corpus.seeds[0].target_reached
+    assert corpus.best_distance == 0
+    assert all(seed.target_reached for seed in corpus.archived_targets)
+
+
+def test_capacity_ten_with_many_targets_is_enforced():
+    corpus = GuidedCorpus(max_size=10)
+    for index in range(25):
+        corpus.consider(bytes([index]), _result(
+            {f"t{index}"}, {(f"t{index}", "next")}, 0, target=True))
+    assert len(corpus) == 10
+    assert len(corpus.target_archive) == 15
+    assert len(corpus) + len(corpus.target_archive) == 25
+    for index in range(25):
+        seed_id = seed_id_for(bytes([index]))
+        assert (corpus.get(seed_id) is not None
+                or seed_id in corpus.target_archive)
+
+
+def test_target_representative_prefers_new_coverage():
+    corpus = GuidedCorpus(max_size=1)
+    corpus.consider(b"small", _result({"a"}, set(), 0, target=True))
+    corpus.consider(b"wide", _result({"b1", "b2", "b3"}, set(), 0,
+                                     target=True))
+    assert len(corpus) == 1
+    assert corpus.seeds[0].covered_blocks == frozenset({"b1", "b2", "b3"})
+    assert seed_id_for(b"small") in corpus.target_archive
+
+
+def test_target_archive_does_not_affect_capacity_or_best_seed():
+    corpus = GuidedCorpus(max_size=2)
+    corpus.consider(b"best", _result({"best"}, set(), 5))
+    for index in range(6):
+        corpus.consider(bytes([index]), _result(
+            {f"t{index}"}, set(), 0, target=True))
+    assert len(corpus) <= 2
+    assert corpus.best_distance == 0
+    assert corpus.get(seed_id_for(b"best")) is None
+    assert seed_id_for(b"best") not in corpus.target_archive
+    assert corpus.best_seed() is not None
+    assert corpus.best_seed().distance == 0
+
+
+def test_capacity_one_without_target_preserves_best_distance_seed():
+    corpus = GuidedCorpus(max_size=1)
+    corpus.consider(b"far", _result({"far"}, set(), 90))
+    corpus.consider(b"best", _result({"best"}, set(), 7))
+    corpus.consider(b"other", _result({"other"}, set(), 30))
+    assert len(corpus) == 1
+    assert corpus.get(seed_id_for(b"best")) is not None
+    assert corpus.best_distance == 7
+
+
+def test_target_pruning_is_deterministic():
+    def build():
+        corpus = GuidedCorpus(max_size=3)
+        for index in range(30):
+            corpus.consider(bytes([index]), _result(
+                {f"t{index % 7}"}, {(f"t{index % 7}", "next")}, 0,
+                target=True))
+        return ([seed.seed_id for seed in corpus.seeds],
+                sorted(corpus.target_archive))
+
+    assert build() == build()
