@@ -193,3 +193,76 @@ def test_interprocedural_toy_target_distance_progression():
         (ROOT / "targets" / "toy_nested" / "replay" / "target.bin").read_bytes())
     assert replay.target_reached
     assert replay.distance == 0
+
+
+def test_same_input_has_stable_feedback():
+    ir = _ir()
+    campaign = _campaign(ir)
+    first = campaign.execute_input(b"\x00\x00")
+    second = campaign.execute_input(b"\x00\x00")
+    assert first.covered_blocks == second.covered_blocks
+    assert first.covered_edges == second.covered_edges
+    assert first.distance == second.distance
+    assert first.nearest_block == second.nearest_block
+    assert first.target_reached == second.target_reached
+
+
+def test_true_and_false_branches_map_to_correct_successors():
+    ir = _ir()
+    branch_x = next(
+        block_id for block_id, block in ir.blocks.items()
+        if block.function == "deep_target"
+        and any("x > 20" in statement for statement in block.statements))
+    branch_y = next(
+        block_id for block_id, block in ir.blocks.items()
+        if block.function == "deep_target"
+        and any("y > 100" in statement for statement in block.statements))
+    target = _target_id(ir)
+    false_return = next(
+        block_id for block_id, block in ir.blocks.items()
+        if block.function == "deep_target"
+        and any("NOT_REACHED" in statement for statement in block.statements))
+    campaign = _campaign(ir)
+    low = campaign.execute_input(b"\x00\x00")
+    mid = campaign.execute_input(b"\x32\x00")
+    high = campaign.execute_input(b"\x32\x96")
+    assert branch_x in low.covered_blocks and branch_y not in low.covered_blocks
+    assert false_return in low.covered_blocks
+    assert branch_x in mid.covered_blocks and branch_y in mid.covered_blocks
+    assert false_return in mid.covered_blocks and target not in mid.covered_blocks
+    assert target in high.covered_blocks
+    assert false_return not in high.covered_blocks
+
+
+BRANCH_ROOT = ROOT / "targets" / "toy_branches" / "target"
+
+
+def test_multi_branch_toy_target_distances_and_decoys():
+    from targets.toy_branches.adapter import build_adapter as branch_adapter
+
+    ir = build_icfg(BRANCH_ROOT)
+    target_id = next(
+        block_id for block_id, block in ir.blocks.items()
+        if any("TARGET_REACHED" in statement
+               for statement in block.statements))
+    campaign = GuidedCampaign(
+        ir=ir,
+        target=BasicBlockTarget(target_id),
+        adapter=branch_adapter(),
+        corpus=GuidedCorpus(20),
+        scheduler=GuidedScheduler(epsilon=0.0, random_seed=0),
+        mutator=BasicMutator(random_seed=0),
+        config=CampaignConfig(max_executions=10),
+    )
+    expected = [
+        (bytes([0, 0, 0]), 2, False),
+        (bytes([0, 50, 0]), 1, False),
+        (bytes([0, 50, 150]), 0, True),
+        (bytes([1, 50, 150]), 3, False),
+        (bytes([2, 50, 150]), 3, False),
+    ]
+    for data, distance, reached in expected:
+        result = campaign.execute_input(data)
+        assert result.distance == distance
+        assert result.target_reached is reached
+        assert result.unmatched_edge_count == 0

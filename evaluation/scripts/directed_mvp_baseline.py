@@ -21,6 +21,7 @@ from stateforge.fuzzing.guidance.scheduler import (
 )
 from stateforge.fuzzing.guidance.target import BasicBlockTarget
 from targets.toy_app.adapter import build_adapter as simple_adapter
+from targets.toy_branches.adapter import build_adapter as branch_adapter
 from targets.toy_nested.adapter import build_adapter as nested_adapter
 
 TRIALS = 20
@@ -38,6 +39,12 @@ TARGETS = {
         "seeds": [ROOT / "targets" / "toy_nested" / "seeds" / "seed_00.bin"],
         "adapter": nested_adapter,
         "target_function": "gate",
+    },
+    "toy_branches": {
+        "root": ROOT / "targets" / "toy_branches" / "target",
+        "seeds": [ROOT / "targets" / "toy_branches" / "seeds" / "seed_00.bin"],
+        "adapter": branch_adapter,
+        "target_function": "deep_target",
     },
 }
 ARMS = ("directed", "uniform", "coverage_only")
