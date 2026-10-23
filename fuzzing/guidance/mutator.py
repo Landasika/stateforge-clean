@@ -8,6 +8,7 @@ class BasicMutator:
     def __init__(self, random_seed: int = 0, rng: random.Random | None = None):
         self.random_seed = random_seed
         self._rng = rng if rng is not None else random.Random(random_seed)
+        self.last_operator: str | None = None
         self.operators = (
             "bit_flip",
             "byte_replace",
@@ -23,11 +24,13 @@ class BasicMutator:
             return b""
         base = bytes(data[:max_size])
         if not base:
+            self.last_operator = "insert"
             return self._empty_case(max_size, other)
         available = list(self.operators)
         if not other:
             available.remove("splice")
         operator = self._rng.choice(available)
+        self.last_operator = operator
         result = getattr(self, f"_{operator}")(base, max_size, other)
         result = result[:max_size]
         if result == base:

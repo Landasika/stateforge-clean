@@ -64,10 +64,14 @@ class GuidedSeed:
 
 
 class GuidedCorpus:
-    def __init__(self, max_size: int = 1000):
+    def __init__(self, max_size: int = 1000,
+                 retention_policy: str = "distance"):
         if max_size < 1:
             raise ValueError("max_size must be positive")
+        if retention_policy not in ("distance", "coverage"):
+            raise ValueError("retention_policy must be 'distance' or 'coverage'")
         self.max_size = max_size
+        self.retention_policy = retention_policy
         self._seeds: dict[str, GuidedSeed] = {}
         self.covered_blocks: set[str] = set()
         self.covered_edges: set[tuple[str, str]] = set()
@@ -109,8 +113,12 @@ class GuidedCorpus:
             self.target_reached = True
         if seed_id in self._seeds:
             return False
-        retain = (reached or bool(new_blocks) or bool(new_edges) or improves
-                  or representative or not self._seeds)
+        if self.retention_policy == "coverage":
+            retain = (reached or bool(new_blocks) or bool(new_edges)
+                      or not self._seeds)
+        else:
+            retain = (reached or bool(new_blocks) or bool(new_edges)
+                      or improves or representative or not self._seeds)
         if not retain:
             return False
         seed = GuidedSeed(

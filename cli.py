@@ -173,10 +173,11 @@ def guided_cmd(args) -> int:
             min_energy=args.min_energy,
             max_energy=args.max_energy,
             scheduler_name=args.scheduler,
+            corpus_policy=args.corpus_policy,
             progress_every=args.progress_every,
         )
         target = BasicBlockTarget(args.target_bb)
-        corpus = GuidedCorpus(args.max_corpus_size)
+        corpus = GuidedCorpus(args.max_corpus_size, args.corpus_policy)
         if args.scheduler == "uniform":
             scheduler = UniformScheduler(
                 random_seed=args.random_seed, energy=args.min_energy)
@@ -250,6 +251,8 @@ def main() -> int:
     guided.add_argument("--random-seed", type=int, default=0)
     guided.add_argument("--min-energy", type=int, default=1)
     guided.add_argument("--max-energy", type=int, default=32)
+    guided.add_argument("--corpus-policy", choices=("distance", "coverage"),
+                        default="distance")
     guided.add_argument("--fault-policy", choices=("continue", "stop"),
                         default="continue")
     guided.add_argument("--scheduler", choices=("guided", "uniform"),

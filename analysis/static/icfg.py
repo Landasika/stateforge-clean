@@ -50,28 +50,33 @@ def build_icfg(app_root: str | Path, callgraph: dict[str, list[str]] | None = No
     ir = ProgramIR(metadata={"root": str(root), "kind": "icfg", "version": 1})
     ast_functions: dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunctionDef] = {}
     aliases: dict[str, list[str]] = {}
+    function_meta: dict[str, tuple[str, str, str]] = {}
     for path in _files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (OSError, SyntaxError):
             continue
         module = _module_name(root, path)
-        for node, class_path in _walk_with_class(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                
-                
-                short = ".".join(class_path + [node.name]) if class_path else node.name
-                qname = f"{module}.{short}"
-                ast_functions[(module, short)] = node
-                aliases.setdefault(short, []).append(qname)
-                rel_id = str(path.relative_to(root))
-                cfg = build_function_cfg(node, str(path), module, id_file=rel_id)
-                if not include_all_functions and callgraph and qname not in callgraph:
-                    continue
-                ir.functions[qname] = cfg.function
-                ir.blocks.update(cfg.blocks)
-                for edge in cfg.edges:
-                    ir.add_edge(edge)
+        for node, class_path, function_path in _walk_functions(tree):
+            source_short = ".".join(class_path + function_path + [node.name])
+            trace_qualname = ".".join(
+                class_path
+                + [f"{name}.<locals>" for name in function_path]
+                + [node.name])
+            qname = f"{module}.{source_short}"
+            ast_functions[(module, source_short)] = node
+            aliases.setdefault(source_short, []).append(qname)
+            function_meta[qname] = (module, source_short, ".".join(class_path))
+            rel_id = str(path.relative_to(root))
+            cfg = build_function_cfg(
+                node, str(path), module, id_file=rel_id,
+                function_name=source_short, qualname=trace_qualname)
+            if not include_all_functions and callgraph and qname not in callgraph:
+                continue
+            ir.functions[qname] = cfg.function
+            ir.blocks.update(cfg.blocks)
+            for edge in cfg.edges:
+                ir.add_edge(edge)
 
     
     
@@ -79,17 +84,22 @@ def build_icfg(app_root: str | Path, callgraph: dict[str, list[str]] | None = No
     
     unresolved: list[dict[str, object]] = []
     for qname, fn in list(ir.functions.items()):
-        module, _, fname = qname.rpartition(".")
-        node = ast_functions.get((module, fname))
+        meta = function_meta.get(qname)
+        if meta is None:
+            module, _, source_short = qname.rpartition(".")
+            context_class = ""
+        else:
+            module, source_short, context_class = meta
+        node = ast_functions.get((module, source_short))
         if node is None:
             continue
+        fname = source_short
         block_calls: dict[str, list[tuple[int, int, str]]] = {}
         for call in _iter_owned_calls(node):
             callee_short = _callee_name(call)
-            callee = _resolve_callee(callee_short, module, ast_functions, aliases)
+            callee = _resolve_callee(callee_short, module, ast_functions,
+                                     aliases, context_class)
             if callee is None and callee_short and callgraph is not None:
-                
-                
                 callee = _resolve_via_callgraph(qname, callee_short,
                                                 ir, callgraph)
             line = getattr(call, "lineno", 0)
@@ -149,15 +159,22 @@ def build_icfg(app_root: str | Path, callgraph: dict[str, list[str]] | None = No
     return ir
 
 
-def _walk_with_class(tree: ast.Module):
-    
-    stack = [(node, []) for node in ast.iter_child_nodes(tree)]
-    while stack:
-        node, path = stack.pop()
-        yield node, path
-        child_path = path + [node.name] if isinstance(node, ast.ClassDef) else path
-        stack.extend((child, child_path)
-                     for child in ast.iter_child_nodes(node))
+def _walk_functions(tree: ast.Module):
+    def visit(node, classes, functions):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node, classes, functions
+            for child in node.body:
+                yield from visit(child, classes, functions + [node.name])
+            return
+        if isinstance(node, ast.ClassDef):
+            for child in node.body:
+                yield from visit(child, classes + [node.name], functions)
+            return
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, classes, functions)
+
+    for child in ast.iter_child_nodes(tree):
+        yield from visit(child, [], [])
 
 
 def _resolve_via_callgraph(caller: str, short: str | None, ir: ProgramIR,
@@ -183,22 +200,47 @@ def _resolve_via_callgraph(caller: str, short: str | None, ir: ProgramIR,
     return callees.pop() if len(callees) == 1 else None
 
 
-def _callee_name(call: ast.Call) -> str | None:
-    if isinstance(call.func, ast.Name):
-        return call.func.id
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
+def _expr_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _expr_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    if isinstance(node, ast.Call):
+        prefix = _expr_name(node.func)
+        return prefix
     return None
 
 
-def _resolve_callee(short: str | None, module: str, funcs, aliases) -> str | None:
+def _callee_name(call: ast.Call) -> str | None:
+    return _expr_name(call.func)
+
+
+def _resolve_callee(short: str | None, module: str, funcs, aliases,
+                    context_class: str = "") -> str | None:
     if not short:
         return None
-    direct = (module, short)
-    if direct in funcs:
-        return f"{module}.{short}"
-    candidates = [f"{m}.{n}" for (m, n) in funcs if n == short]
-    if len(candidates) == 1:
-        return candidates[0]
+    candidates: list[str] = []
+    if short.startswith(("self.", "cls.")):
+        rest = short.split(".", 1)[1]
+        if context_class:
+            candidates.append(f"{context_class}.{rest}")
+        candidates.append(rest)
+    elif "." in short:
+        candidates.append(short)
+        if context_class:
+            candidates.append(f"{context_class}.{short}")
+    else:
+        if context_class:
+            candidates.append(f"{context_class}.{short}")
+        candidates.append(short)
+    for candidate in candidates:
+        if (module, candidate) in funcs:
+            return f"{module}.{candidate}"
+    for candidate in candidates:
+        matches = [f"{m}.{n}" for (m, n) in funcs
+                   if n == candidate or n.endswith("." + candidate)]
+        if len(set(matches)) == 1:
+            return matches[0]
     aliased = aliases.get(short, [])
     return aliased[0] if len(aliased) == 1 else None

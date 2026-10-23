@@ -14,8 +14,12 @@ class FunctionCFG:
 
 class _Builder:
     def __init__(self, node: ast.FunctionDef | ast.AsyncFunctionDef, file: str,
-                 module: str, id_file: str | None = None):
+                 module: str, id_file: str | None = None,
+                 function_name: str | None = None,
+                 qualname: str | None = None):
         self.node, self.file, self.module = node, file, module
+        self.function_name = function_name or node.name
+        self.qualname = qualname or self.function_name
         
         self.id_file = id_file or file
         self.raw_blocks: list[tuple[str, str, list[ast.stmt], ast.expr | None]] = []
@@ -162,25 +166,29 @@ class _Builder:
             if not lines:
                 lines = [self.node.lineno]
             lo, hi = min(lines), max(lines)
-            base = f"{self.id_file}::{self.node.name}::{lo}-{hi}::{kind}"
+            base = f"{self.id_file}::{self.function_name}::{lo}-{hi}::{kind}"
             used[base] = used.get(base, 0) + 1
             bid = f"{base}::{used[base]}"
             ids[raw] = bid
             text = [ast.unparse(s) for s in stmts]
             if test is not None:
                 text = [f"<test> {ast.unparse(test)}"] + text
-            blocks[bid] = BasicBlock(bid, self.file, self.module, self.node.name,
-                                     lo, hi, kind, text, sorted(set(lines)))
+            blocks[bid] = BasicBlock(bid, self.file, self.module,
+                                     self.function_name, lo, hi, kind, text,
+                                     sorted(set(lines)))
         edges: list[FlowEdge] = []
         for src, dst, kind, condition in self.edges:
             if src in ids and dst in ids:
                 edges.append(FlowEdge(ids[src], ids[dst], kind, condition))
-        qname = f"{self.module}.{self.node.name}"
-        fn = FunctionIR(qname, self.file, self.module, ids[entry], ids[exit_node], list(blocks))
+        qname = f"{self.module}.{self.function_name}"
+        fn = FunctionIR(qname, self.file, self.module, ids[entry],
+                        ids[exit_node], list(blocks), self.qualname)
         return FunctionCFG(fn, blocks, edges)
 
 
 def build_function_cfg(node: ast.FunctionDef | ast.AsyncFunctionDef,
                        file: str, module: str,
-                       id_file: str | None = None) -> FunctionCFG:
-    return _Builder(node, file, module, id_file).build()
+                       id_file: str | None = None,
+                       function_name: str | None = None,
+                       qualname: str | None = None) -> FunctionCFG:
+    return _Builder(node, file, module, id_file, function_name, qualname).build()

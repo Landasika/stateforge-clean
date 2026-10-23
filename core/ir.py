@@ -35,6 +35,7 @@ class FunctionIR:
     entry: str
     exit: str
     blocks: list[str] = field(default_factory=list)
+    qualname: str = ""
 
 
 @dataclass

@@ -67,6 +67,13 @@ class TargetManager:
                  if block in self._distances]
         return min(known) if known else None
 
+    def nearest_block(self, trace: MappedTrace) -> str | None:
+        known = [(self._distances[block], block) for block in trace.blocks
+                 if block in self._distances]
+        if not known:
+            return None
+        return min(known, key=lambda item: (item[0], item[1]))[1]
+
     def reached(self, trace: MappedTrace) -> bool:
         return self.target.block_id in trace.blocks
 

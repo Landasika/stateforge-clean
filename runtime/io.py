@@ -42,7 +42,8 @@ def merge_events(paths: list[str | Path]) -> list[TraceEvent]:
             request_id = remap.get(event.request_id, request_offset)
             index = next_index.get(request_id, 0)
             next_index[request_id] = index + 1
-            merged.append(TraceEvent(request_id, index, event.file, event.function,
-                                     event.line, event.event_type))
+            merged.append(TraceEvent(request_id, index, event.file,
+                                     event.function, event.line,
+                                     event.event_type, event.qualname))
         request_offset += len(request_ids)
     return merged

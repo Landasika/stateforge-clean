@@ -19,6 +19,7 @@ class TraceEvent:
     function: str
     line: int
     event_type: str = "line"
+    qualname: str = ""
 
 
 _SELF_FILE = __file__      
@@ -64,9 +65,12 @@ class TraceSession:
             with self._lock:
                 index = self._request_indices.get(rid, 0)
                 self._request_indices[rid] = index + 1
+                qualname = getattr(frame.f_code, "co_qualname",
+                                   frame.f_code.co_name)
                 self.events.append(TraceEvent(rid, index, resolved,
                                               frame.f_code.co_name,
-                                              frame.f_lineno, event))
+                                              frame.f_lineno, event,
+                                              qualname=qualname))
         return self._trace
 
     def __enter__(self):

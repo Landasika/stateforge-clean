@@ -43,6 +43,9 @@ class ExecutionResult:
     error: str | None
     trace_events: int = 0
     unresolved_events: int = 0
+    nearest_block: str | None = None
+    valid_edge_count: int = 0
+    unmatched_edge_count: int = 0
 
 
 @dataclass
@@ -60,6 +63,7 @@ class CampaignConfig:
     min_energy: int = 1
     max_energy: int = 32
     scheduler_name: str = "guided"
+    corpus_policy: str = "distance"
     progress_every: int = 100
 
     def __post_init__(self) -> None:
@@ -77,6 +81,8 @@ class CampaignConfig:
             raise ValueError("fault_policy must be 'continue' or 'stop'")
         if self.scheduler_name not in ("guided", "uniform"):
             raise ValueError("scheduler_name must be 'guided' or 'uniform'")
+        if self.corpus_policy not in ("distance", "coverage"):
+            raise ValueError("corpus_policy must be 'distance' or 'coverage'")
         if self.min_energy < 1 or self.max_energy < self.min_energy:
             raise ValueError("invalid energy bounds")
         if self.progress_every < 1:
@@ -97,6 +103,7 @@ class CampaignConfig:
             "min_energy": self.min_energy,
             "max_energy": self.max_energy,
             "scheduler": self.scheduler_name,
+            "corpus_policy": self.corpus_policy,
             "progress_every": self.progress_every,
         }
 
@@ -117,7 +124,7 @@ class GuidedCampaign:
         if not callable(getattr(adapter, "execute", None)):
             raise ValueError("adapter must provide execute(data)")
         self.corpus = corpus if corpus is not None else GuidedCorpus(
-            self.config.max_corpus_size)
+            self.config.max_corpus_size, self.config.corpus_policy)
         if scheduler is None:
             if self.config.scheduler_name == "uniform":
                 scheduler = UniformScheduler(
@@ -189,8 +196,7 @@ class GuidedCampaign:
                     else self.target_manager.distance_for_trace(mapped))
         reached = self.target_manager.reached(mapped)
         covered_blocks = frozenset(mapped.blocks)
-        covered_edges = frozenset(pair for pair in mapped.edges
-                                  if pair in self._valid_edges)
+        covered_edges = frozenset(mapped.observed_valid_edges)
         self.total_trace_events += len(events)
         self.mapping_failures += len(mapped.unresolved)
         if error is not None:
@@ -206,6 +212,9 @@ class GuidedCampaign:
             error=error,
             trace_events=len(events),
             unresolved_events=len(mapped.unresolved),
+            nearest_block=self.target_manager.nearest_block(mapped),
+            valid_edge_count=len(covered_edges),
+            unmatched_edge_count=len(mapped.unmatched_transitions),
         )
 
     def run(self, initial_seeds: Iterable[bytes] | None = None) -> CampaignResult:
@@ -265,13 +274,16 @@ class GuidedCampaign:
                     max_size=self.config.max_input_size,
                     other=other,
                 )
+                operator = getattr(self.mutator, "last_operator", None)
                 input_id = f"candidate_{self.executions + 1}"
-                self._evaluate(candidate, parent, input_id)
+                self._evaluate(candidate, parent, input_id,
+                               mutation_operator=operator)
                 if self._stopped:
                     return
 
     def _evaluate(self, data: bytes, parent: GuidedSeed | None,
-                  input_id: str) -> ExecutionResult:
+                  input_id: str,
+                  mutation_operator: str | None = None) -> ExecutionResult:
         parent_id = parent.seed_id if parent is not None else None
         result = self.execute_input(data, parent_id=parent_id, input_id=input_id)
         new_blocks, new_edges = self.corpus.novelty(result)
@@ -308,6 +320,16 @@ class GuidedCampaign:
             "new_edges": len(new_edges),
             "retained": retained,
             "target_reached": result.target_reached,
+            "distance_improved": (
+                bool(result.target_reached) or (
+                    parent is not None
+                    and parent.distance is not None
+                    and result.distance is not None
+                    and result.distance < parent.distance)),
+            "nearest_block": result.nearest_block,
+            "mutation_operator": mutation_operator,
+            "valid_edge_count": result.valid_edge_count,
+            "unmatched_edge_count": result.unmatched_edge_count,
             "error": result.error,
             "execution_time_ms": result.execution_time_ms,
             "trace_events": result.trace_events,
