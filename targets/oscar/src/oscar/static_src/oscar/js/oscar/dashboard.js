@@ -1,0 +1,714 @@
+/*global jQuery */
+
+var oscar = (function(o, $) {
+
+    function onFileChange(evt) {
+        var reader = new FileReader();
+        var imgId = evt.target.id + "-image";
+        reader.onload = (function() {
+            return function(e) {
+                var imgDiv = $("#" + imgId);
+                imgDiv.children('img').attr('src', e.target.result);
+            };
+        })();
+        reader.readAsDataURL(evt.target.files[0]);
+
+        var $input = $(evt.target);
+        var $parentTab = $input.parents('.tab-pane').first();
+        var imageContainer = $input.parents('.sortable-handle').first();
+        imageContainer.find('.btn-reorder').removeAttr('disabled').removeClass('disabled');
+        var $extraImg = $input.parents('.upload-image').children('li').last();
+        var $totalForms = $parentTab.find("input[name$=images-TOTAL_FORMS]");
+        var $maxForms = $parentTab.find("input[name$=images-MAX_NUM_FORMS]");
+        var numExisting = parseInt($totalForms.val());
+        var numMax = parseInt($maxForms.val());
+
+        // Do not create extra image form if number of maximum allowed forms has reached.
+        if (numExisting < numMax) {
+            var $newImg = o.dashboard._extraProductImg.clone();
+            var productId = $('#images-0-product').val();
+            $newImg.insertAfter($extraImg);
+            // update attrs on cloned el
+            $newImg.find("[id^='id_images-']," +
+                "[for^='id_images-']," +
+                "[id^='upload_button_id_images-']," +
+                "img[alt='thumbnail']").each(function () {
+                var $el = $(this);
+                ["id", "name", "for", "onload", "onerror"].forEach(function (attr) {
+                    var val = $el.attr(attr);
+                    if (val) {
+                        var parts = val.split('-');
+                        parts[1] = numExisting;
+                        $el.attr(attr, parts.join('-'));
+                    }
+                });
+            });
+            $newImg.find('#id_images-' + numExisting + '-display_order').val(numExisting);
+            $newImg.find('#id_images-' + numExisting + '-product').val(productId);
+
+            var $newFile = $newImg.find('input[type="file"]');
+            $newFile.change(onFileChange);
+            numExisting += 1;
+            $totalForms.val(numExisting);
+        }
+    }
+
+    o.getCsrfToken = function() {
+        // Extract CSRF token from cookies
+        var cookies = document.cookie.split(';');
+        var csrf_token = null;
+        $.each(cookies, function(index, cookie) {
+            var cookieParts = $.trim(cookie).split('=');
+            if (cookieParts[0] == 'csrftoken') {
+                csrf_token = cookieParts[1];
+            }
+        });
+        // Extract from cookies fails for HTML-Only cookies
+        if (! csrf_token) {
+            csrf_token = $(document.forms.valueOf()).find('[name="csrfmiddlewaretoken"]')[0].value;
+        }
+        return csrf_token;
+    };
+
+    o.dashboard = {
+        init: function(options) {
+            // Run initialisation that should take place on every page of the dashboard.
+            var defaults = {
+                'dateFormat': 'DD/MM/YYYY',
+                'timeFormat': 'HH:mm',
+                'datetimeFormat': 'DD/MM/YYYY HH:mm',
+                'stepMinute': 15,
+                'datetimePickerConfig': {
+                    icons: {
+                        time: 'fas fa-clock',
+                        date: 'fas fa-calendar',
+                        up: 'fas fa-arrow-up',
+                        down: 'fas fa-arrow-down',
+                        previous: 'fas fa-chevron-left',
+                        next: 'fas fa-chevron-right',
+                        today: 'fas fa-calendar-check-o',
+                        clear: 'fas fa-trash',
+                        close: 'fas fa-times'
+                    }
+                },
+                'tinyConfig': {
+                    entity_encoding: 'raw',
+                    statusbar: false,
+                    menubar: false,
+                    convert_urls: false,
+                    plugins: "link lists",
+                    style_formats: [
+                        {title: 'Text', block: 'p'},
+                        {title: 'Heading 2', block: 'h2'},
+                        {title: 'Heading 3', block: 'h3'},
+                        {title: 'Heading 4', block: 'h4'},
+                        {title: 'Heading 5', block: 'h5'},
+                        {title: 'Heading 6', block: 'h6'}
+                    ],
+                    toolbar: "styles | bold italic blockquote | bullist numlist | link"
+                }
+            };
+            o.dashboard.options = $.extend(true, defaults, options);
+
+            o.dashboard.initWidgets(window.document);
+            o.dashboard.initForms();
+
+            $(".category-select ul").prev('a').on('click', function(){
+                var $this = $(this),
+                    plus = $this.hasClass('ico_expand');
+                if (plus) {
+                    $this.removeClass('ico_expand').addClass('ico_contract');
+                } else {
+                    $this.removeClass('ico_contract').addClass('ico_expand');
+                }
+                return false;
+            });
+
+            // Adds error icon if there are errors in the product update form
+            $('[data-behaviour="tab-nav-errors"] .tab-pane').each(function(){
+                var productErrorListener = $(this).find('[class*="error"]:not(:empty)').closest('.tab-pane').attr('id');
+                $('.tab-nav a[href="#' + productErrorListener + '"]').append('<i class="fas fa-info-circle float-right"></i>');
+            });
+
+            o.dashboard.filereader.init();
+        },
+        initWidgets: function(el) {
+            /** Attach widgets to form input.
+             *
+             * This function is called once for the whole page. In that case el is window.document.
+             *
+             * It is also called when input elements have been dynamically added. In that case el
+             * contains the newly added elements.
+             *
+             * If the element selector refers to elements that may be outside of newly added
+             * elements, don't limit to elements within el. Then the operation will be performed
+             * twice for these elements. Make sure that that is harmless.
+             */
+            o.dashboard.initDatePickers(el);
+            o.dashboard.initMasks(el);
+            o.dashboard.initWYSIWYG(el);
+            o.dashboard.initSelects(el);
+            o.dashboard.initProductImages(el);
+        },
+        initMasks: function(el) {
+            $(el).find(':input').inputmask();
+        },
+        initSelects: function(el) {
+            // Adds type/search for select fields
+            var $selects = $(el).find('select').not('.no-widget-init select').not('.no-widget-init');
+            $selects.filter('.form-stacked select').css('width', '100%');
+            $selects.filter('.form-inline select').css('width', '300px');
+            $selects.not('.related-widget-wrapper select').select2({width: 'resolve'});
+            $selects.filter('.related-widget-wrapper.single select').select2({
+                // Keep updated labels after editing related obj
+                templateResult: function (data) {
+                    return $(data.element).text();
+                },
+                templateSelection: function (data) {
+                    return $(data.element).text();
+                },
+                width: 'resolve'
+            });
+            $selects.filter('.related-widget-wrapper.multiple select').select2({
+                width: '95%'
+            });
+            $(el).find('select.select2').each(function(i, e) {
+                var opts = {};
+                if($(e).data('ajax-url')) {
+                    opts = {
+                        ajax: {
+                            url: $(e).data('ajax-url'),
+                            dataType: 'json',
+                            data: function(params) {
+                                return {
+                                    q: params.term,
+                                    page: params.page || 1
+                                };
+                            }
+                        },
+                        multiple: $(e).data('multiple')
+                    };
+                }
+                $(e).select2(opts);
+            });
+        },
+        initDatePickers: function(el) {
+            if ($.fn.datetimepicker) {
+
+                // Set "Tempus Dominus Bootstrap 4" datetime picker's global options.
+                $.fn.datetimepicker.Constructor.Default = $.extend(
+                    {}, $.fn.datetimepicker.Constructor.Default, o.dashboard.options.datetimePickerConfig
+                );
+
+                var defaultDatepickerConfig = {
+                    'format': o.dashboard.options.dateFormat,
+                };
+                var $dates = $(el).find('[data-oscarWidget="date"]').not('.no-widget-init').not('.no-widget-init *');
+                $dates.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultDatepickerConfig, {
+                            'format': $ele.data('dateformat')
+                        });
+                    $ele.datetimepicker(config);
+                });
+
+                var defaultDatetimepickerConfig = {
+                    'format': o.dashboard.options.datetimeFormat,
+                    'stepping': o.dashboard.options.stepMinute
+                };
+                var $datetimes = $(el).find('[data-oscarWidget="datetime"]').not('.no-widget-init').not('.no-widget-init *');
+                $datetimes.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultDatetimepickerConfig, {
+                            'format': $ele.data('datetimeformat'),
+                            'stepping': $ele.data('stepminute')
+                        });
+                    $ele.datetimepicker(config);
+                });
+
+                var defaultTimepickerConfig = {
+                    'format': o.dashboard.options.timeFormat,
+                    'stepping': o.dashboard.options.stepMinute
+                };
+                var $times = $(el).find('[data-oscarWidget="time"]').not('.no-widget-init').not('.no-widget-init *');
+                $times.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultTimepickerConfig, {
+                            'format': $ele.data('timeformat'),
+                            'stepping': $ele.data('stepminute'),
+                            'viewMode': 'times'
+                        });
+                    $ele.datetimepicker(config);
+                });
+            }
+        },
+        initWYSIWYG: function(el) {
+            // Use TinyMCE by default
+            var $textareas = $(el).find('textarea').not('.no-widget-init textarea').not('.no-widget-init');
+            $textareas.filter('form.wysiwyg textarea').tinymce(o.dashboard.options.tinyConfig);
+            $textareas.filter('.wysiwyg').tinymce(o.dashboard.options.tinyConfig);
+        },
+        initForms: function() {
+            // Disable buttons when they are clicked and show a "loading" message taken from the
+            // data-loading-text attribute.
+            // Do not disable if button is inside a form with invalid fields.
+            // This uses a delegated event so that it keeps working for forms that are reloaded
+            // via AJAX: https://api.jquery.com/on/#direct-and-delegated-events
+            $(document.body).on('click', '[data-loading-text]', function(){
+                var $btn_or_input = $(this),
+                    form = $btn_or_input.parents("form");
+                if (!form || $(":invalid", form).length == 0) {
+                    var d = 'disabled',
+                        val = $btn_or_input.is('input') ? 'val' : 'html';
+                    // push to event loop so as not to delay form submission
+                    setTimeout(function() {
+                        $btn_or_input[val]($btn_or_input.data('loading-text'));
+                        $btn_or_input.addClass(d).attr(d, d).prop(d, true);
+                    });
+                }
+            });
+
+            // Add href to url, so when the page is reloaded this tab will be displayed.
+            $('.nav-tabs a').on('shown.bs.tab', function (e) {
+                window.location.hash = e.target.hash;
+            });
+
+            // Display tabs that have invalid input fields
+            $('input').on('invalid', function(){
+                var id = $(this).closest('.tab-pane').attr('id');
+                if (id) {
+                    $('.bs-docs-sidenav a[href="#' + id + '"]').tab('show');
+                }
+            });
+        },
+        initProductImages: function() {
+            // convert last 'extra' form into a multi-upload
+            // (assumes `extra=1` in django formset)
+            var $productImages = $('#product_images');
+            var $extraImg = $productImages.find('.upload-image li').last();
+            o.dashboard._extraProductImg = $extraImg.clone();
+
+            $productImages.find('a:disabled').parents('sortable-handle').sortable('disable');
+
+            $('ol.upload-image').sortable({
+                vertical: false,
+                group: 'serialization',
+                handle: '.btn-handle',
+                onDrop: function ($item, container, _super) {
+                    var $sortFields = $("input[name$=-display_order]");
+                    $sortFields.each(function(i){
+                        $(this).val(i);
+                    });
+                    _super($item, container);
+                }
+            });
+        },
+        offers: {
+            init: function() {
+                oscar.dashboard.offers.adjustBenefitForm();
+                $('#id_type').change(function() {
+                    oscar.dashboard.offers.adjustBenefitForm();
+                });
+            },
+            adjustBenefitForm: function() {
+                var type = $('#id_type').val(),
+                    $valueContainer = $('#id_value').parents('.form-group');
+                if (type == 'Multibuy') {
+                    $('#id_value').val('');
+                    $valueContainer.hide();
+                } else {
+                    $valueContainer.show();
+                }
+            }
+        },
+        reports: {
+            init: function() {
+                var $reportType = $('#id_report_type');
+                oscar.dashboard.reports.toggleUnsupportedFields($reportType);
+                $reportType.change(function() {
+                    oscar.dashboard.reports.toggleUnsupportedFields($reportType);
+                });
+            },
+            toggleUnsupportedFields: function($reportType) {
+                var unsupportedFields = JSON.parse($reportType.attr('data-unsupported-fields') || '{}'),
+                    unsupported = unsupportedFields[$reportType.val()] || [];
+                $.each(unsupportedFields, function(code, fieldIds) {
+                    $.each(fieldIds, function(i, fieldId) {
+                        var disabled = unsupported.indexOf(fieldId) !== -1;
+                        $('#' + fieldId).prop('disabled', disabled).closest('.form-group').toggle(!disabled);
+                    });
+                });
+            }
+        },
+        product_attributes: {
+            init: function(){
+                var type_selects = $("select[name$=type]");
+
+                type_selects.each(function(){
+                    o.dashboard.product_attributes.toggleOptionGroup($(this));
+                });
+
+                type_selects.change(function(){
+                    o.dashboard.product_attributes.toggleOptionGroup($(this));
+                });
+            },
+
+            toggleOptionGroup: function(type_select){
+                var option_group_select = $('#' + type_select.attr('id').replace('type', 'option_group'));
+                var v = type_select.val();
+                var showOptionGroup = v === 'option' || v === 'multi_option';
+                option_group_select.parent().parent().toggle(showOptionGroup);
+                if(showOptionGroup){
+                    option_group_select.attr('required', 'required');
+                }else{
+                    option_group_select.attr('required', null);
+                }
+            }
+        },
+        ranges: {
+            init: function() {
+                $('[data-behaviours~="remove"]').click(function() {
+                    var $this = $(this);
+                    $this.parents('table').find('input').prop('checked', false);
+                    $this.parents('tr').find('input').prop('checked', true);
+                    $this.parents('form').submit();
+                });
+                $('[data-behaviours~="select-all"]').click(function() {
+                    var $this = $(this);
+                    var checked = $this.is(':checked');
+                    $this.parents('table').find('tbody input').prop('checked', checked);
+                });
+            }
+        },
+        orders: {
+            initTabs: function() {
+                if (location.hash) {
+                    $('.nav-tabs a[href="' + location.hash + '"]').tab('show');
+                }
+            },
+        },
+        bulk_actions: (function() {
+            var $allInputs, 
+                $countMessage, 
+                $allSelectedMessage, 
+                $selectAllQuestion, 
+                $clearSelections, 
+                $selectionCount, 
+                recordsInPage;
+
+            function reset() {
+                $countMessage.hide();
+                $allSelectedMessage.hide();
+                $selectAllQuestion.hide();
+                $clearSelections.hide();
+            }
+
+            function showQuestion() {
+                $countMessage.show();
+                $allSelectedMessage.hide();
+                $clearSelections.hide();
+                $selectAllQuestion.show();
+            }
+
+            function showCounter() {
+                $countMessage.show();
+                $allSelectedMessage.hide();
+                $clearSelections.hide();
+                $selectAllQuestion.hide();
+            }
+
+            function allAcrossSelected() {
+                $countMessage.hide();
+                $allSelectedMessage.show();
+                $clearSelections.show();
+                $selectAllQuestion.hide();
+            }
+
+            function updateCounter(num) {
+                $selectionCount.html(num);
+            }
+
+            function addToggleAll() {
+                var $table = $('form table');
+                var $selectAll = $('<input type="checkbox" name="select_all" />').css({
+                    'margin-right': '5px',
+                    'vertical-align': 'top'
+                });
+                $('th:first', $table).prepend($selectAll);
+
+                $selectAll.on("change", function(){
+                    var selectAllChecked = $(this).is(':checked');
+                    $table.find('tr td input[name^="selected_"]').prop(
+                        "checked", selectAllChecked
+                    );
+                    $('input[name="select_across"]').val('0');
+                    if (selectAllChecked) {
+                        updateCounter(recordsInPage);
+                        showQuestion();
+                    } else {
+                        updateCounter(0);
+                        reset();
+                    }
+                });
+            }
+
+            function checkEvents() {
+                $allInputs.on("change", function() {
+                    var allAcrossSelected = $('input[name="select_across"]').val() === '1';
+                    var selectAllChecked = $('input[name="select_all"]').is(':checked');
+                    var currentSelections = $allInputs.filter(':checked').length;
+                    updateCounter(currentSelections);
+
+                    if (allAcrossSelected || selectAllChecked) {
+                        $('input[name="select_all"]').prop("checked", false);
+                        $('input[name="select_across"]').val('0');
+                        showCounter();
+                    } else if (currentSelections === 0) {
+                        reset();
+                    } else if (currentSelections === recordsInPage) {
+                        $('input[name="select_all"]').prop("checked", true);
+                        showQuestion();
+                    } else {
+                        showCounter();
+                    }
+                });
+
+                $selectAllQuestion.find("a").on("click", function(e) {
+                    e.preventDefault();
+                    allAcrossSelected();
+                    $('input[name="select_across"]').val('1');
+                });
+
+                $clearSelections.find("a").on("click", function(e) {
+                    e.preventDefault();
+                    $allInputs.prop("checked", false);
+                    $('input[name="select_all"]').prop("checked", false);
+                    $('input[name="select_across"]').val('0');
+                    updateCounter(0);
+                    reset();
+                });
+            }
+
+            var init = function() {
+                $allInputs = $('input[name^="selected_"]');
+                $countMessage = $('.bulk-actions .action-counter');
+                $allSelectedMessage = $('.bulk-actions .all');
+                $selectAllQuestion = $('.bulk-actions .question');
+                $clearSelections = $('.bulk-actions .clear');
+                $selectionCount = $('.bulk-actions .selected-records');
+                recordsInPage = $countMessage.data("objects-count");
+                addToggleAll();
+                checkEvents();
+            };
+
+            return {
+                "init": init
+            };
+        }()),
+        reordering: (function() {
+            var options = {
+                    handle: '.btn-handle',
+                    submit_url: '#'
+                },
+                saveOrder = function(data) {
+                // Get the csrf token, otherwise django will not accept the
+                // POST request.
+                    var csrf = o.getCsrfToken();
+                    $.ajax({
+                        type: 'POST',
+                        data: $.param(data),
+                        dataType: "json",
+                        url: options.submit_url,
+                        beforeSend: function(xhr) {
+                            xhr.setRequestHeader("X-CSRFToken", csrf);
+                        }
+                    });
+                },
+                init = function(user_options) {
+                    options = $.extend(options, user_options);
+                    var group = $(options.wrapper).sortable({
+                        group: 'serialization',
+                        containerSelector: 'tbody',
+                        itemSelector: 'tr',
+                        handle: options.handle,
+                        vertical: true,
+                        onDrop: function ($item, container, _super) {
+                            var data = group.sortable("serialize");
+                            saveOrder(data);
+                            _super($item, container);
+                        },
+                        placeholder: '<tr class="placeholder"/>',
+                        serialize: function (parent, children, isContainer) {
+                            if (isContainer) {
+                                return children;
+                            }
+                            else {
+                                var parts = parent.attr('id').split('_');
+                                return {'name': parts[0], 'value': parts[1]};
+                            }
+                        }
+                    });
+                };
+
+            return {
+                init: init,
+                saveOrder: saveOrder
+            };
+        }()),
+        filereader: {
+            init: function () {
+                // Add local file loader to update image files on change in
+                // dashboard. This will provide a preview to the selected
+                // image without uploading it. Upload only occures when
+                // submitting the form.
+                if (window.FileReader) {
+                    $('input[type="file"]').change(onFileChange);
+                }
+            },
+        },
+        product_lists: {
+            init: function() {
+                var imageModal = $("#product-image-modal"),
+                    thumbnails = $('.sub-image');
+                thumbnails.click(function(e){
+                    e.preventDefault();
+                    var a = $(this);
+                    imageModal.find('h4').text(a.find('img').attr('alt'));
+                    imageModal.find('img').attr('src', a.data('original'));
+                    imageModal.modal();
+                });
+            }
+        },
+        product_bulk_action: {
+            init: function(options) {
+                var formBound = !!(options && options.formBound);
+
+                function syncParentToggles() {
+                    $('.select-all-children').each(function() {
+                        var pid = $(this).data('parent');
+                        var $ch = $('input[name="selected_products"][data-parent="' + pid + '"]');
+                        $(this).prop('checked',
+                            $ch.length > 0 && $ch.filter(':checked').length === $ch.length);
+                    });
+                }
+
+                // One entry per selectable product type.
+                var TYPES = [
+                    {
+                        itemClass:   'select-standalone',
+                        hiddenName:  'select_all_standalones',
+                        toggleSel:   '.select-all-standalones-toggle',
+                        itemsSel:    'input[type="checkbox"].select-standalone',
+                        linkSel:     '.select-all-standalones-link',
+                        labelSel:    '.select-all-standalones-text',
+                        counterSel:  '#standalone-selected-counter',
+                    },
+                    {
+                        itemClass:   'select-parent',
+                        hiddenName:  'select_all_parents',
+                        toggleSel:   '.select-all-parents-toggle',
+                        itemsSel:    'input[type="checkbox"].select-parent',
+                        linkSel:     '.select-all-parents-link',
+                        labelSel:    '.select-all-parents-text',
+                        counterSel:  '#parent-selected-counter',
+                    },
+                    {
+                        itemClass:   'select-child',
+                        hiddenName:  'select_all_children',
+                        toggleSel:   '.select-all-children-global',
+                        itemsSel:    'input[type="checkbox"].select-child',
+                        linkSel:     '.select-all-children-link',
+                        labelSel:    '.select-all-children-text',
+                        counterSel:  '#child-selected-counter',
+                        onSync:      syncParentToggles,
+                    },
+                ];
+
+                var byClass = {};
+                TYPES.forEach(function(t) { byClass[t.itemClass] = t; });
+
+                // Read the checkbox state for a type and derive all of its UI.
+                function syncType(t) {
+                    var $toggle = $(t.toggleSel);
+                    if (!$toggle.length) return;
+
+                    var $items  = $(t.itemsSel);
+                    var visible = $items.length;
+                    var checked = $items.filter(':checked').length;
+                    var allChecked = visible > 0 && checked === visible;
+                    var nothingHidden = visible >= t.total;
+
+                    if (visible > 0 && !allChecked) t.acrossIntent = false;
+                    var across = visible === 0
+                        ? t.acrossIntent
+                        : allChecked && (nothingHidden || t.acrossIntent);
+
+                    $toggle.prop('checked', visible === 0 ? across : allChecked);
+                    $('input[name="' + t.hiddenName + '"]').val(across ? 'on' : '');
+
+                    $(t.linkSel).text(across ? t.acrossText : t.linkText)
+                        .toggleClass('text-muted fst-italic', across);
+
+                    $(t.counterSel).text('(' + (across ? t.total : checked) + ' / ' + t.total + ')');
+
+                    if (t.onSync) t.onSync();
+                }
+
+                TYPES.forEach(function(t) {
+                    var $toggle = $(t.toggleSel);
+                    if (!$toggle.length) return;
+
+                    t.total = parseInt($(t.linkSel).data('count'), 10) || 0;
+                    t.linkText = $(t.linkSel).text().trim();
+                    t.acrossText = $(t.linkSel).attr('data-across-label');
+                    t.acrossIntent = formBound
+                        ? $('input[name="' + t.hiddenName + '"]').val() === 'on'
+                        : true;
+
+                    // use an alternative label if part of the products of this type are hidden.
+                    var visibleCount = $(t.itemsSel).length;
+                    var hasHidden = t.total > visibleCount;
+                    $(t.linkSel).toggle(hasHidden);
+                    if (hasHidden && visibleCount > 0) {
+                        var $label = $(t.labelSel);
+                        $label.text($label.attr('data-hidden-label'));
+                    }
+
+                    $toggle.on('change', function() {
+                        $(t.itemsSel).prop('checked', this.checked);
+                        if ($(t.itemsSel).length === 0) t.acrossIntent = this.checked;
+                        syncType(t);
+                    });
+
+                    $(t.linkSel).on('click', function(e) {
+                        e.preventDefault();
+                        var across = $('input[name="' + t.hiddenName + '"]').val() === 'on';
+                        $(t.itemsSel).prop('checked', !across);
+                        t.acrossIntent = !across;
+                        syncType(t);
+                    });
+
+                    syncType(t);
+                });
+
+                // Sync the select all/across 
+                $('.select-all-children').on('change', function() {
+                    var pid = $(this).data('parent');
+                    $('input[name="selected_products"][data-parent="' + pid + '"]')
+                        .prop('checked', this.checked);
+                    syncType(byClass['select-child']);
+                });
+
+                $(document).on('change', 'input[name="selected_products"]', function() {
+                    var $cb = $(this);
+                    TYPES.forEach(function(t) {
+                        if ($cb.hasClass(t.itemClass)) syncType(t);
+                    });
+                });
+            }
+        },
+    };
+
+    return o;
+
+})(oscar || {}, jQuery);

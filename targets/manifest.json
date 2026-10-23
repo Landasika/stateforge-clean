@@ -1,0 +1,39 @@
+{
+  "targets": [
+    {
+      "name": "vampi",
+      "upstream": "https://github.com/erev0s/VAmPI",
+      "framework": "Flask 2.2 + connexion + SQLAlchemy",
+      "database": "sqlite",
+      "license": "MIT",
+      "source_path": "targets/vampi/app",
+      "harness": "targets/vampi/harness.py",
+      "fuzz_target": "targets/vampi/fuzz_target.py",
+      "requirements": "targets/vampi/requirements.txt"
+    },
+    {
+      "name": "pygoat",
+      "upstream": "https://github.com/adeyosemanputra/pygoat",
+      "framework": "Django 4.2 + django-allauth",
+      "database": "sqlite",
+      "license": "MIT",
+      "source_path": "targets/pygoat/src",
+      "harness": "targets/pygoat/harness.py",
+      "fuzz_target": "targets/pygoat/fuzz_target.py",
+      "requirements": "targets/pygoat/requirements.txt"
+    },
+    {
+      "name": "oscar",
+      "upstream": "https://github.com/django-oscar/django-oscar",
+      "upstream_commit": "16353384039253cc4e6e9d7684d5bd63522dffbc",
+      "framework": "Django 6.1 + django-oscar",
+      "database": "sqlite",
+      "license": "BSD-3-Clause",
+      "source_path": "targets/oscar/src/oscar",
+      "sandbox_path": "targets/oscar/sandbox",
+      "harness": "targets/oscar/harness.py",
+      "fuzz_target": "targets/oscar/fuzz_target.py",
+      "requirements": "targets/oscar/requirements.txt"
+    }
+  ]
+}
