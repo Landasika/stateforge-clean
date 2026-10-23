@@ -9,7 +9,8 @@
 - 数据库：SQLite
 - 应用类型：OWASP 漏洞 Web API 基准
 - 路由数量：14
-- 本地已有观测：46 个函数、424 个 basic block、492 条边；14 个端点、16 个候选目标
+- vendored 源目录：`targets/vampi/app`
+- vendored 静态观测：33 个函数、290 个 basic block、332 条边
 - 状态域：Token、DATABASE
 
 跨请求守卫：
@@ -33,6 +34,8 @@
 - 数据库：SQLite
 - 应用类型：OWASP 漏洞 Web 教学平台
 - 路由数量：24
+- vendored 源目录：`targets/pygoat/src`
+- vendored 静态观测：152 个函数、1145 个 basic block、1280 条边
 - 状态域：Session、DATABASE
 
 跨请求守卫：
@@ -56,7 +59,9 @@
 - 数据库：SQLite（sandbox 配置）
 - 应用类型：生产级电商框架官方 sandbox
 - 路由数量：24
-- 本地已有观测：24/24 路由返回非 5xx；其中 302 重定向 17 个，admin 返回 200，checkout 子步骤存在真实 404
+- vendored 源目录：`targets/oscar/src/oscar`、`targets/oscar/sandbox`
+- vendored 静态观测：2195 个函数、12447 个 basic block、12278 条边
+- 冒烟观测：24/24 路由返回非 5xx；其中 302 重定向 17 个、404 共 6 个、admin 返回 200
 - 状态域：Session、DATABASE、权限
 
 跨请求守卫：
@@ -101,6 +106,28 @@
 
 ## 当前接入状态
 
-- 三个靶标均已存在于 StateForge 主工作树的 `apps20` 真实应用池中。
-- 当前 clean 仓库未包含三个靶标的源码或 harness。
+- 三个靶标源码、harness、fuzz_target、requirements 和 license 已进入 `feature/m2-constraint-guidance` 分支的 `targets/` 目录。
+- `main` 分支当前只包含本 docs 目录，不包含 `targets/`。
+- 三个 harness 冒烟结果：VAmPI 14/14 non-5xx，PyGoat 24/24 non-5xx，Oscar 24/24 non-5xx。
+- 三个靶标的 vendored 源码均已通过 `build_icfg`，basic block 数量分别为 290、1145、12447。
 - 三个靶标尚未在 `feature/m2-constraint-guidance` 分支完成 M2/M4 验收运行。
+
+## 运行入口
+
+```text
+targets/vampi/harness.py
+targets/vampi/fuzz_target.py
+targets/pygoat/harness.py
+targets/pygoat/fuzz_target.py
+targets/oscar/harness.py
+targets/oscar/fuzz_target.py
+targets/manifest.json
+```
+
+目标依赖分别记录在：
+
+```text
+targets/vampi/requirements.txt
+targets/pygoat/requirements.txt
+targets/oscar/requirements.txt
+```
