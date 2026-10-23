@@ -3,7 +3,7 @@
   "target_reached": true,
   "executions": 10,
   "executions_to_target": 10,
-  "wall_clock_time_to_target_seconds": 0.022190154064446688,
+  "wall_clock_time_to_target_seconds": 0.0130138099193573,
   "best_distance": 0,
   "unique_covered_blocks": 14,
   "unique_valid_icfg_edges": 15,
@@ -12,7 +12,7 @@
   "mapping_failures": 0,
   "mapping_failure_rate": 0.0,
   "termination_reason": "target_reached",
-  "elapsed_seconds": 0.022305606049485505,
+  "elapsed_seconds": 0.013063609949313104,
   "target_reaching_input_id": "candidate_10",
   "output_dir": "/home/landasika/icassp/stateforge-clean/evaluation/directed_mvp/demo"
 }

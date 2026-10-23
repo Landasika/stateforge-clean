@@ -3,7 +3,7 @@
   "target_reached": true,
   "executions": 10,
   "executions_to_target": 10,
-  "wall_clock_time_to_target_seconds": 0.022190154064446688,
+  "wall_clock_time_to_target_seconds": 0.0130138099193573,
   "best_distance": 0,
   "unique_covered_blocks": 14,
   "unique_valid_icfg_edges": 15,
@@ -12,7 +12,7 @@
   "mapping_failures": 0,
   "mapping_failure_rate": 0.0,
   "termination_reason": "target_reached",
-  "elapsed_seconds": 0.022319877054542303,
+  "elapsed_seconds": 0.013074159971438348,
   "target_reaching_input_id": "candidate_10",
   "output_dir": "/home/landasika/icassp/stateforge-clean/evaluation/directed_mvp/demo",
   "scheduler": {
@@ -38,7 +38,7 @@
   "total_trace_events": 127,
   "source_hash": "dacf5c6023efd022d71223909b7bedcd94d9d53b4d60c6245132bca38330b691",
   "target_input_path": "/home/landasika/icassp/stateforge-clean/evaluation/directed_mvp/demo/target_reaching_input.bin",
-  "execution_throughput_per_second": 448.0311417291121,
+  "execution_throughput_per_second": 764.8674960261982,
   "config": {
     "max_executions": 2000,
     "max_seconds": null,
