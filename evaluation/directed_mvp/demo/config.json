@@ -1,0 +1,55 @@
+{
+  "target_basic_block": "app.py::deep_target::9-9::terminal::1",
+  "source_hash": "dacf5c6023efd022d71223909b7bedcd94d9d53b4d60c6245132bca38330b691",
+  "started_at": 1792739682.0561407,
+  "initial_corpus": [
+    "seed_96a296d224f285c6",
+    "seed_913da1f8df6f8fd4"
+  ],
+  "config": {
+    "max_executions": 2000,
+    "max_seconds": null,
+    "max_input_size": 64,
+    "max_corpus_size": 1000,
+    "epsilon": 0.2,
+    "random_seed": 42,
+    "stop_on_target": true,
+    "fault_policy": "continue",
+    "allow_stale_ir": false,
+    "output_dir": "/home/landasika/icassp/stateforge-clean/evaluation/directed_mvp/demo",
+    "min_energy": 1,
+    "max_energy": 1,
+    "scheduler": "guided",
+    "corpus_policy": "distance",
+    "progress_every": 100
+  },
+  "scheduler": {
+    "name": "guided",
+    "epsilon": 0.2,
+    "random_seed": 42,
+    "min_energy": 1,
+    "max_energy": 1
+  },
+  "mutation": {
+    "operators": [
+      "bit_flip",
+      "byte_replace",
+      "byte_insert",
+      "byte_delete",
+      "range_overwrite",
+      "splice"
+    ],
+    "random_seed": 42,
+    "max_input_size": 64
+  },
+  "environment": {
+    "python": "3.13.5 | packaged by Anaconda, Inc. | (main, Jun 12 2025, 16:09:02) [GCC 11.2.0]",
+    "python_executable": "/tmp/sf-m1.1-venv/bin/python",
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "dependencies": {
+      "PyYAML": "6.0.2",
+      "pytest": "8.3.4",
+      "flask": "3.1.0"
+    }
+  }
+}

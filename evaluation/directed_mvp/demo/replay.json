@@ -1,0 +1,18 @@
+{
+  "target_basic_block": "app.py::deep_target::9-9::terminal::1",
+  "target_reached": true,
+  "executions": 10,
+  "executions_to_target": 10,
+  "wall_clock_time_to_target_seconds": 0.022190154064446688,
+  "best_distance": 0,
+  "unique_covered_blocks": 14,
+  "unique_valid_icfg_edges": 15,
+  "retained_seeds": 3,
+  "unexpected_exceptions": 0,
+  "mapping_failures": 0,
+  "mapping_failure_rate": 0.0,
+  "termination_reason": "target_reached",
+  "elapsed_seconds": 0.022305606049485505,
+  "target_reaching_input_id": "candidate_10",
+  "output_dir": "/home/landasika/icassp/stateforge-clean/evaluation/directed_mvp/demo"
+}
